@@ -1,0 +1,6 @@
+seed = 0
+device = "cpu"
+num_agents = 4
+appearance_dim = 8
+initial_life = 10
+initial_points = 3

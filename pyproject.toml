@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "self-genesis"
+version = "0.0.2"
+description = "Minimal foundation for multi-agent survival experiments"
+requires-python = ">=3.11"
+dependencies = ["torch>=2.2,<3"]
+
+[project.scripts]
+self-genesis = "self_genesis.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

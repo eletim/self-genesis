@@ -7,14 +7,21 @@ from torch import nn
 from torch.distributions import Categorical
 from torch.nn import functional as F
 
-from self_genesis.encounter import Observation
+from self_genesis.encounter import EncounterExperience, Observation
 from self_genesis.world import Action
+
+
+@dataclass(frozen=True)
+class EntityMemoryEntry:
+    appearance: torch.Tensor
+    value: torch.Tensor
 
 
 @dataclass(frozen=True)
 class PolicyState:
     memory: torch.Tensor
     affect: torch.Tensor
+    entities: tuple[EntityMemoryEntry, ...] = ()
 
 
 class RecurrentPolicy(nn.Module):
@@ -27,13 +34,14 @@ class RecurrentPolicy(nn.Module):
 
     def __init__(self, appearance_dim: int, *, vocabulary_size: int = 4,
                  max_message_length: int = 3, memory_dim: int = 16,
-                 affect_dim: int = 4):
+                 affect_dim: int = 4, entity_memory_dim: int = 16):
         super().__init__()
         for name, value, minimum in (
             ("appearance_dim", appearance_dim, 1),
             ("vocabulary_size", vocabulary_size, 1),
             ("max_message_length", max_message_length, 0),
             ("memory_dim", memory_dim, 1), ("affect_dim", affect_dim, 1),
+            ("entity_memory_dim", entity_memory_dim, 0),
         ):
             if type(value) is not int or value < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
@@ -42,15 +50,22 @@ class RecurrentPolicy(nn.Module):
         self.max_message_length = max_message_length
         self.memory_dim = memory_dim
         self.affect_dim = affect_dim
+        self.entity_memory_dim = entity_memory_dim
         # Four resources, role, three partner-action categories, callback phase,
         # appearance, and ordered message slots (including an empty category).
         input_dim = 9 + appearance_dim + max_message_length * (vocabulary_size + 1)
-        self.thought = nn.Linear(input_dim + memory_dim + affect_dim, memory_dim)
+        self.thought = nn.Linear(
+            input_dim + memory_dim + affect_dim + entity_memory_dim, memory_dim)
         self.memory_update = nn.GRUCell(memory_dim + affect_dim, memory_dim)
         self.affect_update = nn.Linear(input_dim + 2 * memory_dim, affect_dim)
         self.message_head = nn.Linear(memory_dim, vocabulary_size)
         self.action_head = nn.Linear(memory_dim, 2)
         self.value_head = nn.Linear(memory_dim, 1)
+        if entity_memory_dim:
+            self.entity_update = nn.GRUCell(
+                input_dim + 2 * memory_dim + affect_dim, entity_memory_dim)
+            self.encounter_update = nn.GRUCell(
+                input_dim + memory_dim + affect_dim + 4, entity_memory_dim)
 
     def initial_state(self) -> PolicyState:
         parameter = next(self.parameters())
@@ -83,14 +98,54 @@ class RecurrentPolicy(nn.Module):
         return torch.cat((resources, context,
                           observation.partner_appearance.to(parameter), encoded_message))
 
+    def retrieve_entity(self, appearance: torch.Tensor, state: PolicyState) -> torch.Tensor:
+        """Exact observed-Appearance lookup; collisions deliberately share a value."""
+        if self.entity_memory_dim:
+            for entry in state.entities:
+                if torch.equal(entry.appearance, appearance):
+                    return entry.value
+        return state.memory.new_zeros(self.entity_memory_dim)
+
     def forward(self, observation: Observation, state: PolicyState, *,
                 communicating: bool) -> tuple[torch.Tensor, PolicyState]:
         inputs = self._encode(observation, communicating)
-        thought = torch.tanh(self.thought(torch.cat((inputs, state.memory, state.affect))))
+        retrieved = self.retrieve_entity(observation.partner_appearance, state)
+        thought = torch.tanh(self.thought(torch.cat(
+            (inputs, state.memory, state.affect, retrieved))))
         memory = self.memory_update(torch.cat((thought, state.affect)), state.memory)
         affect = torch.tanh(self.affect_update(torch.cat((inputs, thought, memory))))
         logits = self.message_head(memory) if communicating else self.action_head(memory)
-        return logits, PolicyState(memory, affect)
+        entities = state.entities
+        if self.entity_memory_dim:
+            value = self.entity_update(torch.cat((inputs, thought, memory, affect)), retrieved)
+            entities = self._store_entity(observation.partner_appearance, value, entities)
+        return logits, PolicyState(memory, affect, entities)
+
+    @staticmethod
+    def _store_entity(appearance, value, entities):
+        entry = EntityMemoryEntry(appearance.detach().clone(), value)
+        # Copy-on-write preserves earlier rollout states and other agents.
+        for index, previous in enumerate(entities):
+            if torch.equal(previous.appearance, entry.appearance):
+                return entities[:index] + (entry,) + entities[index + 1:]
+        return entities + (entry,)
+
+    def complete_encounter(self, experience: EncounterExperience,
+                           state: PolicyState) -> PolicyState:
+        """Write resolved experience without sampling or advancing Working Memory."""
+        if not self.entity_memory_dim:
+            return state
+        observation = experience.observation
+        inputs = self._encode(observation, communicating=False)
+        outcome = inputs.new_tensor([
+            experience.action is Action.NOTHING, experience.action is Action.GIVE,
+            experience.gave, experience.received,
+        ])
+        value = self.encounter_update(
+            torch.cat((inputs, state.memory, state.affect, outcome)),
+            self.retrieve_entity(observation.partner_appearance, state))
+        entities = self._store_entity(observation.partner_appearance, value, state.entities)
+        return PolicyState(state.memory, state.affect, entities)
 
 
 class AgentPolicy:
@@ -113,7 +168,10 @@ class AgentPolicy:
         self.entropies: list[torch.Tensor] = []
 
     def detach(self) -> None:
-        self.state = PolicyState(self.state.memory.detach(), self.state.affect.detach())
+        self.state = PolicyState(
+            self.state.memory.detach(), self.state.affect.detach(),
+            tuple(EntityMemoryEntry(entry.appearance, entry.value.detach())
+                  for entry in self.state.entities))
         self.clear_decisions()
 
     def clear_decisions(self) -> None:
@@ -133,6 +191,9 @@ class AgentPolicy:
         self.values.append(value)
         self.entropies.append(distribution.entropy() * self.network.max_message_length)
         return tuple(tokens.tolist())
+
+    def complete_encounter(self, experience: EncounterExperience) -> None:
+        self.state = self.network.complete_encounter(experience, self.state)
 
     def act(self, observation: Observation) -> Action:
         logits, self.state = self.network(observation, self.state, communicating=False)

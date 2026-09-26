@@ -8,11 +8,13 @@ import random
 import torch
 
 from self_genesis.analysis import (RelationshipAnalysis, action_metrics,
+                                   partner_history_metrics,
                                    communication_metrics, evaluation_summary,
                                    relationship_metrics)
 from self_genesis.config import ExperimentConfig
 from self_genesis.encounter import EncounterProtocol, Observation
 from self_genesis.experiment import resolve_device
+from self_genesis.observation import entity_memory_record
 from self_genesis.policy import AgentPolicy, PolicyState, RecurrentPolicy
 from self_genesis.rollout import RolloutCollector
 from self_genesis.training import train_episode
@@ -25,9 +27,18 @@ INTERVENTION_SEMANTICS = {
         'using random.Random(evaluation_seed + 3). Use the partner-indexed permutation only '
         'in observations, consistently across all callbacks in that encounter. Fixed points '
         'and vectors belonging to dead agents are allowed. World Appearance is unchanged.'),
+    'entity-memory-reset': (
+        'Clear only each agent Entity Memory before every world step. Retain Working Memory, '
+        'affect, weights and world state. Entity Memory updates normally throughout communication, '
+        'action and encounter completion; other recurrent state can still carry history.'),
+    'appearance-replacement': (
+        'Before every world step, draw independent uniform [0, 1) Appearance vectors for all '
+        'agents from an isolated CPU torch.Generator(evaluation_seed + 4). Present the '
+        'partner-indexed vector consistently through communication, action and completion. '
+        'Resample next step; preserve world Appearance and all policy state.'),
     'working-memory-reset': (
         'Zero only each agent Working Memory before every world step. Retain affect, weights, '
-        'and all world state. Memory evolves normally between communication and action '
+        'Entity Memory, and all world state. Memory evolves normally between communication and action '
         'callbacks within the encounter; affect can still carry history.'),
 }
 INTERVENTIONS = tuple(INTERVENTION_SEMANTICS)
@@ -49,6 +60,24 @@ class _AppearanceShuffleProtocol(EncounterProtocol):
         observation = super()._observe(agent, partner, **kwargs)
         return replace(observation, partner_appearance=self.world.state.appearance[
             self._appearance_indices[partner]].clone())
+
+
+class _AppearanceReplacementProtocol(EncounterProtocol):
+    """Present fresh random identities per encounter on a separate sampling stream."""
+
+    def __init__(self, world, **kwargs):
+        super().__init__(world, **kwargs)
+        self._replacement_rng = torch.Generator(device="cpu").manual_seed(kwargs['seed'] + 4)
+
+    def step(self, policies):
+        self._appearances = torch.rand(
+            self.world.state.appearance.shape, generator=self._replacement_rng
+        ).to(self.world.state.appearance)
+        return super().step(policies)
+
+    def _observe(self, agent, partner, **kwargs):
+        observation = super()._observe(agent, partner, **kwargs)
+        return replace(observation, partner_appearance=self._appearances[partner].clone())
 
 
 class FixedPolicy:
@@ -102,18 +131,37 @@ class ProducerOracle:
 
 
 class _EvaluationRecorder:
-    def __init__(self, policy, index, callbacks):
+    def __init__(self, policy, index, callbacks, memory_events):
         self.policy = policy
         self.index = index
         self.callbacks = callbacks
+        self.memory_events = memory_events
+
+    def _record_memory(self, observation, before, phase):
+        if isinstance(self.policy, AgentPolicy):
+            self.memory_events.append(dict(
+                agent=self.index, phase=phase,
+                **entity_memory_record(self.policy.network, observation.partner_appearance,
+                                       before, self.policy.state)))
 
     def communicate(self, observation):
+        before = self.policy.state if isinstance(self.policy, AgentPolicy) else None
         message = tuple(self.policy.communicate(observation))
+        self._record_memory(observation, before, "message")
         self.callbacks.append(dict(agent=self.index, phase="communication", message=message))
         return message
 
+    def complete_encounter(self, experience):
+        complete = getattr(self.policy, "complete_encounter", None)
+        if complete is not None:
+            before = self.policy.state if isinstance(self.policy, AgentPolicy) else None
+            complete(experience)
+            self._record_memory(experience.observation, before, "completion")
+
     def act(self, observation):
+        before = self.policy.state if isinstance(self.policy, AgentPolicy) else None
         action = self.policy.act(observation)
+        self._record_memory(observation, before, "action")
         self.callbacks.append(dict(
             agent=self.index, phase="action", choice=action.value,
             observation=dict(partner_appearance=observation.partner_appearance.tolist())))
@@ -142,6 +190,8 @@ def evaluate_policy(config: ExperimentConfig,
     protocol_type = _ProducerOracleProtocol if network is ProducerOracle else EncounterProtocol
     if intervention == 'appearance-shuffle':
         protocol_type = _AppearanceShuffleProtocol
+    elif intervention == 'appearance-replacement':
+        protocol_type = _AppearanceReplacementProtocol
     protocol = protocol_type(world, seed=config.seed,
                              vocabulary_size=config.vocabulary_size,
                              max_message_length=config.max_message_length)
@@ -152,15 +202,22 @@ def evaluate_policy(config: ExperimentConfig,
                    point_generation_probability=world.state.point_generation_probability.tolist())
     relationships = RelationshipAnalysis(initial, history_by_partner=True)
     messages = []
+    memory_history = []
     returns = [0.0] * config.num_agents
     death_steps = [None] * config.num_agents
     for step in range(budget):
         if intervention == 'working-memory-reset':
             for policy in policies:
-                policy.state = PolicyState(torch.zeros_like(policy.state.memory), policy.state.affect)
+                policy.state = PolicyState(torch.zeros_like(policy.state.memory),
+                                           policy.state.affect, policy.state.entities)
+        elif intervention == 'entity-memory-reset':
+            for policy in policies:
+                policy.state = PolicyState(policy.state.memory, policy.state.affect)
         callbacks = []
-        result = protocol.step([_EvaluationRecorder(policy, i, callbacks)
+        memory_events = []
+        result = protocol.step([_EvaluationRecorder(policy, i, callbacks, memory_events)
                                 for i, policy in enumerate(policies)])
+        memory_history.extend(dict(step=step, **event) for event in memory_events)
         relationships.record_step(dict(
             step=step, participants=[c['agent'] for c in callbacks if c['phase'] == 'action'],
             callbacks=callbacks,
@@ -193,6 +250,8 @@ def evaluate_policy(config: ExperimentConfig,
         final_life=world.state.life.tolist(), final_points=world.state.points.tolist(),
         **action_metrics(rows), relationship_actions=rows, history_key="actual_partner",
         relationship_metrics=relationship_metrics(rows),
+        partner_history_metrics=partner_history_metrics(rows),
+        entity_memory_events=memory_history,
         communication_messages=messages,
         communication=communication_metrics([row['message'] for row in messages],
                                             config.vocabulary_size))
@@ -219,49 +278,64 @@ def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=N
     with Path(output).open('x', encoding='utf-8') as destination:
         training_runs, evaluations, summaries, effects = [], [], [], []
         for training_config in training_conditions:
-            torch.manual_seed(training_config.seed)
-            network = RecurrentPolicy(
-                config.appearance_dim, vocabulary_size=config.vocabulary_size,
-                max_message_length=config.max_message_length,
-                memory_dim=config.memory_dim, affect_dim=config.affect_dim).to(device)
-            collector = RolloutCollector(training_config, network)
-            optimizer = torch.optim.Adam(network.parameters(), lr=config.learning_rate)
-            updates = [asdict(train_episode(collector, optimizer)) for _ in range(config.episodes)]
-            training_runs.append(dict(seed=training_config.seed, updates=updates))
-            network.eval()
+            learned = []
+            # A zero dimension explicitly requests the disabled-only legacy condition.
+            dimensions = [("learned", config.entity_memory_dim)]
+            if config.entity_memory_dim:
+                dimensions.append(("learned-no-entity-memory", 0))
+            for name, dimension in dimensions:
+                learning_config = replace(training_config, entity_memory_dim=dimension)
+                torch.manual_seed(learning_config.seed)
+                network = RecurrentPolicy(
+                    config.appearance_dim, vocabulary_size=config.vocabulary_size,
+                    max_message_length=config.max_message_length,
+                    memory_dim=config.memory_dim, affect_dim=config.affect_dim,
+                    entity_memory_dim=dimension).to(device)
+                collector = RolloutCollector(learning_config, network)
+                optimizer = torch.optim.Adam(network.parameters(), lr=config.learning_rate)
+                updates = [asdict(train_episode(collector, optimizer)) for _ in range(config.episodes)]
+                training_runs.append(dict(seed=learning_config.seed, policy=name,
+                                          config=asdict(learning_config), updates=updates))
+                network.eval()
+                learned.append((name, network))
             for condition in conditions:
-                for name, policy in (("learned", network), ("always-GIVE", Action.GIVE),
+                for name, policy in [*learned, ("always-GIVE", Action.GIVE),
                                      ("always-NOTHING", Action.NOTHING),
-                                     ("producer-oracle", ProducerOracle)):
-                    evaluations.append(dict(training_seed=training_config.seed, policy=name,
-                                            **evaluate_policy(condition, policy)))
-                    if name == 'learned':
-                        baseline = evaluations[-1]
-                for intervention in interventions:
-                    result = dict(training_seed=training_config.seed, policy="learned",
-                                  **evaluate_policy(condition, network, intervention=intervention))
-                    evaluations.append(result)
-                    before = evaluation_summary([baseline], config.vocabulary_size)
-                    after = evaluation_summary([result], config.vocabulary_size)
-                    effects.append(dict(
-                        training_seed=training_config.seed, evaluation_seed=condition.seed,
-                        intervention=intervention,
-                        mean_observed_lifetime_delta=(after['mean_observed_lifetime']
-                                                      - before['mean_observed_lifetime']),
-                        censored_delta=after['censored'] - before['censored'],
-                        give_ratio_delta=(None if before['action_ratios']['GIVE'] is None
-                                          or after['action_ratios']['GIVE'] is None else
-                                          after['action_ratios']['GIVE'] - before['action_ratios']['GIVE'])))
+                                     ("producer-oracle", ProducerOracle)]:
+                    evaluation_config = (replace(condition, entity_memory_dim=policy.entity_memory_dim)
+                                         if isinstance(policy, RecurrentPolicy) else condition)
+                    baseline = dict(training_seed=training_config.seed, policy=name,
+                                    **evaluate_policy(evaluation_config, policy))
+                    evaluations.append(baseline)
+                    if not isinstance(policy, RecurrentPolicy):
+                        continue
+                    for intervention in interventions:
+                        result = dict(training_seed=training_config.seed, policy=name,
+                                      **evaluate_policy(evaluation_config, policy,
+                                                        intervention=intervention))
+                        evaluations.append(result)
+                        before = evaluation_summary([baseline], config.vocabulary_size)
+                        after = evaluation_summary([result], config.vocabulary_size)
+                        effects.append(dict(
+                            training_seed=training_config.seed, evaluation_seed=condition.seed,
+                            policy=name, intervention=intervention,
+                            mean_observed_lifetime_delta=(after['mean_observed_lifetime']
+                                                          - before['mean_observed_lifetime']),
+                            censored_delta=after['censored'] - before['censored'],
+                            give_ratio_delta=(None if before['action_ratios']['GIVE'] is None
+                                              or after['action_ratios']['GIVE'] is None else
+                                              after['action_ratios']['GIVE'] - before['action_ratios']['GIVE'])))
             for name, intervention in [(name, None) for name in (
-                    'learned', 'always-GIVE', 'always-NOTHING', 'producer-oracle')] + [
-                        ('learned', item) for item in interventions]:
+                    *[name for name, _ in learned], 'always-GIVE', 'always-NOTHING',
+                    'producer-oracle')] + [(name, item) for name, _ in learned
+                                           for item in interventions]:
                 matched = [row for row in evaluations if row['training_seed'] == training_config.seed
                            and row['policy'] == name and row['intervention'] == intervention]
                 summaries.append(dict(training_seed=training_config.seed, policy=name,
                                       intervention=intervention,
                                       **evaluation_summary(matched, config.vocabulary_size)))
-        report = dict(schema_version=2, config=asdict(config),
-                      training=training_runs[0]['updates'] if len(training_runs) == 1 else None,
+        report = dict(schema_version=3, config=asdict(config),
+                      training=training_runs[0]['updates'] if len(train_seeds) == 1 else None,
                       training_seeds=train_seeds, training_runs=training_runs,
                       evaluation_seeds=seeds, interventions=interventions,
                       intervention_semantics={name: INTERVENTION_SEMANTICS[name]
@@ -279,6 +353,16 @@ def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=N
                                   'partner indices and history are analysis-only. Prior-aid GIVE '
                                   'difference compares previously aided with encountered-but-unaided '
                                   'partners, excluding unseen partners; null if either bin is empty.',
+                          partner_history='Prior direct aid conditions use repeat encounters; '
+                                          'third-party conditions exclude both participants from '
+                                          'the other-agent set and use all encounters. Attempts '
+                                          'and successful transfers are separate, with positive, '
+                                          'zero and unknown bins. Partner producers are high above '
+                                          'the episode population ability midrange, low otherwise. '
+                                          'High-minus-low GIVE is reported for first and repeat '
+                                          'encounters, then repeat minus first. Each bin reports '
+                                          'callback counts and missing_bin; empty rates and '
+                                          'unsupported differences are null.',
                           communication='Counts and empirical token entropy over sent messages, '
                                         'including empty-message callbacks. These measure channel '
                                         'usage, not causal utility.',
@@ -289,5 +373,5 @@ def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=N
         json.dump(report, destination, allow_nan=False, sort_keys=True)
         destination.write('\n')
     return dict(output=str(Path(output).resolve()), evaluation_seeds=seeds,
-                training_seeds=train_seeds, training_episodes=config.episodes * len(train_seeds),
+                training_seeds=train_seeds, training_episodes=config.episodes * len(training_runs),
                 evaluations=len(evaluations))

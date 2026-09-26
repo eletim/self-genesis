@@ -114,19 +114,21 @@ class RenewableIntegrationTests(unittest.TestCase):
                 for seed in (101, 102):
                     evaluations = [r for r in reports[0]['evaluations'] if r['seed'] == seed]
                     self.assertEqual([r['policy'] for r in evaluations],
-                                     ['learned', 'always-GIVE', 'always-NOTHING',
-                                      'producer-oracle'])
+                                     ['learned', 'learned-no-entity-memory', 'always-GIVE',
+                                      'always-NOTHING', 'producer-oracle'])
                     for result in evaluations:
                         self.assertEqual(result['initial'], evaluations[0]['initial'])
-                        self.assertEqual(result['config'], evaluations[0]['config'])
+                        self.assertEqual({**result['config'], 'entity_memory_dim': 0},
+                                         {**evaluations[0]['config'], 'entity_memory_dim': 0})
                         self.assertLessEqual(result['steps'], horizon)
                         self.assertEqual(result['successful_aid'], sum(
                             r['successful_aid'] for r in result['relationship_actions']))
-                    nothing = evaluations[2]
+                    nothing = next(r for r in evaluations if r['policy'] == 'always-NOTHING')
                     self.assertEqual(nothing['survival_returns'], [min(4, horizon)] * 4)
                     self.assertEqual(nothing['successful_aid'], 0)
                     self.assertEqual(nothing['action_counts']['GIVE'], 0)
-                    self.assertEqual(evaluations[1]['action_counts']['NOTHING'], 0)
+                    give = next(r for r in evaluations if r['policy'] == 'always-GIVE')
+                    self.assertEqual(give['action_counts']['NOTHING'], 0)
 
     def test_cpu_renewable_workflow(self):
         self.run_workflow('cpu')

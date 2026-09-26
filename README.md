@@ -8,6 +8,22 @@
 
 [Validated v0.0.5 matched Actor-Critic versus REINFORCE evidence](docs/matched-learning-experiment.md)
 
+[Validated v0.0.6 Entity Memory comparison and reproduction](docs/entity-memory-experiment.md)
+
+## v0.0.6 Entity Memory evidence
+
+The current default adds 16-dimensional Entity Memory keyed by perceived
+Appearance; `--entity-memory-dim 0` retains the v0.0.5 architecture. The
+[matched CPU experiment](docs/entity-memory-experiment.md) trained each condition
+for 100 updates with three training seeds and three held-out seeds. Mean lifetime
+was 12.4722 steps enabled versus 12.3611 disabled, with paired seed differences
+of -0.0833, +2.3333, and -1.9167. Neither beat always-GIVE (14.4167).
+Entity Memory reset and both Appearance interventions left survival and GIVE
+counts unchanged. These mixed and null findings do not establish improved
+cooperation, survival, useful memory, or producer identification. Both full runs
+replayed exactly; disabled-memory updates and shared evaluation outcomes match
+the actual v0.0.5 implementation. The older results below are historical.
+
 ## v0.0.5 learning and evidence
 
 v0.0.5 defaults to Actor-Critic with a scalar value baseline, detached advantages,
@@ -163,17 +179,55 @@ result = protocol.step(agents)
 ```
 
 Use a distinct `AgentPolicy` for each agent. Adapters may share a network, but
-own separate Working Memory, affect tensors, and sampled-decision log
+own separate Working Memory, affect tensors, Entity Memory, and sampled-decision log
 probabilities. The network itself holds only weights. Its `forward` method
 also accepts and returns explicit `PolicyState` tensors for inspection.
 
 Each communication or action callback encodes resources, partner Appearance,
 role, received message positions, available partner action, and callback phase.
-A thought layer consumes this observation plus previous memory and affect;
+A thought layer consumes this observation plus previous memory, affect, and
+the retrieved Entity Memory value;
 a GRU updates memory using thought and previous affect. New affect is generated
 from the observation, thought, and updated memory, then feeds the next callback.
 Affect dimensions have no predefined meanings or supervised targets. No agent
 indices, self labels, or auxiliary classification objectives are added.
+
+Entity Memory stores one unlabeled latent value per distinct observed Appearance,
+using exact tensor equality for retrieval. An unseen Appearance retrieves zeros;
+identical Appearances share an entry, without hidden IDs. After each callback, a
+learned GRU updates that entry from the observation, thought, updated Working
+Memory, and affect. Retrieval feeds thought and thus both action and Communication
+heads and the critic. After world resolution, an additional learned GRU writes
+completed Encounter experience: the same observed Appearance, pre-step resource
+observation, received message, both chosen actions, and whether each directed
+gift succeeded. Only participants receive this feedback; hidden IDs, generation
+abilities/draws, and analysis histories are excluded. Completion updates only
+Entity Memory, without sampling another decision or adding a loss/reward. The
+same feedback path runs during training and frozen-weight evaluation, including
+Appearance shuffling. Values have no assigned meanings or auxiliary targets.
+Entries persist across encounters and collection boundaries, reset on death and
+at episode boundaries, and detach with other recurrent state only when explicitly
+requested (training does so after complete-episode backpropagation). Storage grows
+with the distinct Appearances observed during an episode; there is no eviction or
+approximate match.
+
+`entity_memory_dim` defaults to 16 in the network and experiment configuration.
+Set it to `0` in TOML or pass `--entity-memory-dim 0` to disable Entity Memory and
+recover the v0.0.5 layer shapes, initialization, and forward computation. The
+existing `working-memory-reset` intervention resets only Working Memory.
+
+Training JSONL states include `entity_memory` entries with observed `appearance`
+and latent `value`. Each callback's `entity_memory` records its `retrieved` value
+and entry lists in `state_before` and `state_after`; step-level
+`entity_memory_completions` records the additional resolved-encounter writes,
+before death resets. Comparison evaluations expose the same snapshots in
+`entity_memory_events`, tagged by step, logging agent index, and phase (`message`,
+`action`, or `completion`). Fixed/oracle policies have no memory events; disabled
+Entity Memory records empty retrievals and entry lists. These additive fields are
+detached JSON values, separate from differentiable rollout states. Logging IDs,
+hidden generation abilities, and analysis histories never feed policy inputs or
+memory writes. Existing action, survival, communication, and training outputs
+retain their meanings. Trace size grows with observed Appearances and callbacks.
 
 The communication head samples independent tokens from one categorical
 distribution for a fixed-length message; the action head samples GIVE or
@@ -393,7 +447,7 @@ keep resource budgets small for exploratory runs.
 
 All flat TOML settings can also be overridden with hyphenated CLI flags:
 `--num-agents`, `--appearance-dim`, `--initial-life`, `--initial-points`,
-`--vocabulary-size`, `--max-message-length`, `--memory-dim`, `--affect-dim`,
+`--vocabulary-size`, `--max-message-length`, `--memory-dim`, `--affect-dim`, `--entity-memory-dim`,
 `--episodes`, `--learning-rate`, `--seed`, `--device`, `--survival-horizon`,
 `--point-generation-probability-min`, `--point-generation-probability-max`,
 `--training-method`, `--value-loss-coefficient`, `--action-entropy-coefficient`,
@@ -456,9 +510,11 @@ python -m self_genesis compare --config configs/renewable.toml --device cpu \
   --output comparison.json
 ```
 
-`compare` trains one shared network per training seed for the configured number of episodes using
+`compare` separately trains Entity Memory enabled (`learned`, configured positive
+`entity_memory_dim`) and disabled (`learned-no-entity-memory`, dimension zero)
+shared networks per training seed for the configured number of episodes using
 only the existing survival objective. It then freezes the weights and evaluates
-learned, always-GIVE, always-NOTHING, and producer-oracle populations separately
+both learned conditions, always-GIVE, always-NOTHING, and producer-oracle populations separately
 for every `--evaluation-seeds` value (default: the configured seed). Each evaluation starts
 with fresh agent memory and a fresh world under identical resources, generation
 probabilities, channel limits, horizon, and seed. Fixed policies send empty
@@ -506,7 +562,7 @@ and does not go through `examples/analyze_run.py`.
 
 
 For a small comparison of both learning methods, independent training seeds, and
-both evaluation interventions (use fresh output filenames):
+all four evaluation interventions (use fresh output filenames):
 
 ```sh
 for method in actor_critic reinforce; do
@@ -514,21 +570,29 @@ for method in actor_critic reinforce; do
     --training-method "$method" --value-loss-coefficient 0.5 \
     --action-entropy-coefficient 0.01 --message-entropy-coefficient 0.01 \
     --episodes 2 --survival-horizon 100 --training-seeds 41 42 43 \
-    --evaluation-seeds 101 102 --interventions appearance-shuffle working-memory-reset \
+    --evaluation-seeds 101 102 \
+    --interventions appearance-shuffle appearance-replacement working-memory-reset entity-memory-reset \
     --output "$method-comparison.json"
 done
 ```
 
 This two-update smoke run is not the recorded 100-update experiment. Use the
-[full reproduction procedure and retained reports](docs/matched-learning-experiment.md#reproduction-and-retained-evidence)
-for the validated findings. Keep all conditions except `--training-method` matched;
+[Entity Memory reproduction procedure and retained report](docs/entity-memory-experiment.md)
+for the current validated findings. The historical
+[learning-method comparison](docs/matched-learning-experiment.md#reproduction-and-retained-evidence)
+requires its recorded checkout. Keep all conditions except `--training-method` matched;
 REINFORCE ignores the value/entropy coefficients.
 
 `--training-seeds` defaults to the configured seed. Each seed initializes and trains
-its own network with the same training budget. Evaluation seeds default to the
+each condition independently with the same training budget, optimizer settings,
+world settings and seed. Dimensions differ, so equal seeds do not imply identical
+initial weights or training trajectories. No trained weights are shared between
+conditions. Explicit `--entity-memory-dim 0` retains a disabled-only `learned` run;
+use a positive dimension (default 16) for the paired comparison. Evaluation seeds default to the
 configured seed independently of this list; choose disjoint lists for held-out
 comparisons. Interventions are optional and applied separately to the frozen
-learned policy, alongside its untreated evaluation and the three baselines.
+learned conditions, each alongside its own untreated evaluation and the three baselines.
+The total training budget is twice the per-condition budget for paired runs.
 
 - `appearance-shuffle`: before each world step, permute the original Appearance
   vectors of **all** agents using an isolated `random.Random(evaluation_seed + 3)`
@@ -538,15 +602,32 @@ learned policy, alongside its untreated evaluation and the three baselines.
   This disrupts stable perceived identity across encounters; it does not mutate
   world Appearance, resources, abilities, encounter routing, or generation RNG.
 - `working-memory-reset`: zero every agent's Working Memory before each world
-  step, retaining affect and all world state. Memory updates normally within the
+  step, retaining Entity Memory, affect and all world state. Memory updates normally within the
   encounter. Affect can still carry history, so this is not a complete removal of
-  recurrent information. Neither treatment updates weights or changes rewards.
+  recurrent information.
+- `entity-memory-reset`: clear every agent's Entity Memory before each world step,
+  preserving Working Memory, affect, weights and world state. Memory can be written
+  and retrieved normally during communication, actions and encounter completion.
+  Working Memory and affect can still carry history. On the separately trained
+  disabled condition this is a no-op.
+- `appearance-replacement`: before each world step, sample fresh independent
+  uniform `[0, 1)` vectors of the configured Appearance dimension for all agents,
+  using an isolated CPU `torch.Generator` seeded with `evaluation_seed + 4`.
+  Present the partner-indexed vector consistently through communication, actions
+  and completion, then resample next step. This uses the world's Appearance
+  distribution but does not permute existing identities. Both Appearance
+  interventions preserve all policy state, world state, and other RNG streams;
+  subsequent policy updates use the presented Appearance as the Entity Memory key.
 
-Comparison schema version 2 adds `training_runs` (seed and updates),
-`training_seeds`, treatment labels, recorded `communication_messages`,
+No intervention updates weights or changes rewards.
+
+Comparison schema version 3 records `training_runs` (seed, policy, full condition
+config and updates), `training_seeds`, treatment labels, recorded `communication_messages`,
 `intervention_semantics`, `metric_semantics`, `summaries`, and
 `intervention_effects`. The original `training` list remains available for a
-single training seed; it is null for multiple seeds. Each summary pools evaluation
+single training seed and refers to the configured `learned` condition only; it is
+null for multiple seeds. Each evaluation records its condition config, and each
+intervention effect includes its learned policy label. Each summary pools evaluation
 samples only within one training seed, policy, and intervention:
 
 - GIVE collapse is a descriptive evaluation diagnostic: a GIVE fraction at least
@@ -561,6 +642,29 @@ samples only within one training seed, policy, and intervention:
   and the difference is null if either group has no samples. Only earlier steps
   enter history, even for the second action callback. This is descriptive dependence,
   not a causal estimate; actual identity, abilities, and histories stay analysis-only.
+- `partner_history_metrics` conditions subsequent GIVE separately on earlier
+  received and outgoing aid, with distinct attempt and successful-transfer bins.
+  Direct conditions use repeat encounters. Third-party conditions use all
+  encounters and count each participant's earlier incoming/outgoing aid with
+  agents outside the current pair. Histories use actual directed identities,
+  reset each episode, and exclude all current-step events.
+  Each condition has `positive`, `zero`, and `unknown` bins and a
+  `positive_minus_zero_give` difference. Missing transfer records propagate
+  unknown success counts, while attempts remain countable.
+- `partner_history_metrics.partner_producers` compares GIVE **to** high versus
+  low producers separately at `first` and `repeat` encounters. High means the
+  partner's fixed generation probability is strictly above the midpoint of the
+  episode population's minimum and maximum probabilities; low includes ties.
+  The row records this `producer_midpoint` and `partner_producer_bin`.
+  Equal abilities leave high empty; missing abilities form an `unknown` bin.
+  `high_minus_low_give` is reported for each encounter group, followed by
+  `repeat_minus_first_producer_difference`. These are descriptive associations,
+  not causal estimates or learning targets.
+- All new bins include `action_callbacks` sample counts, action counts and
+  fractions, successful aid totals, `successful_aid_known_samples`, and an
+  explicit `missing_bin`. Empty fractions and differences lacking either
+  comparison bin are null. Samples are callbacks, not independent agents.
+  Metrics appear per evaluation, in pooled summaries, and in offline analysis.
 - Communication reports callback and nonempty-message counts, token counts, mean
   length, and empirical token entropy in bits. Entropy is null with no tokens;
   mean length is null with no callbacks. Empty messages are counted, including a
@@ -568,7 +672,7 @@ samples only within one training seed, policy, and intervention:
 
 `intervention_effects` reports intervention-minus-untreated differences in observed
 lifetime, censoring count, and GIVE fraction for each matched training/evaluation
-seed pair. The detailed rows and summaries support history and Communication
+seed pair and learned condition. The detailed rows and summaries support history and Communication
 comparisons. World initialization and sampling streams restart identically for
 each evaluation; changed actions can subsequently change resources, survivors,
 encounters, and generation draws. Reports contain the treatment and metric

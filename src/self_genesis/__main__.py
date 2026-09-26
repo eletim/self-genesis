@@ -24,7 +24,7 @@ def main() -> None:
                         help="Additional frozen learned-policy evaluation treatments")
     for name in ("num_agents", "appearance_dim", "initial_life", "initial_points",
                  "vocabulary_size", "max_message_length", "memory_dim", "affect_dim",
-                 "episodes", "survival_horizon"):
+                 "entity_memory_dim", "episodes", "survival_horizon"):
         parser.add_argument("--" + name.replace("_", "-"), type=int)
     parser.add_argument("--learning-rate", type=float)
     parser.add_argument("--training-method", choices=("actor_critic", "reinforce"))

@@ -17,7 +17,23 @@ def _json_tensor(value):
 
 def _state(state):
     return {"working_memory": state.memory.detach().cpu().tolist(),
-            "affect": state.affect.detach().cpu().tolist()}
+            "affect": state.affect.detach().cpu().tolist(),
+            "entity_memory": _entities(state)}
+
+
+def _entities(state):
+    return [{"appearance": entry.appearance.detach().cpu().tolist(),
+             "value": entry.value.detach().cpu().tolist()} for entry in state.entities]
+
+
+def entity_memory_record(network, appearance, before, after):
+    """Detached analysis snapshot; never passed back to a policy or memory writer."""
+    return {
+        "appearance": appearance.detach().cpu().tolist(),
+        "retrieved": network.retrieve_entity(appearance, before).detach().cpu().tolist(),
+        "state_before": _entities(before),
+        "state_after": _entities(after),
+    }
 
 
 def _resources(world):
@@ -66,7 +82,7 @@ class RunRecorder:
             resolved_device=str(collector.world.state.life.device),
             policy_settings={name: getattr(network, name) for name in (
                 "appearance_dim", "vocabulary_size", "max_message_length",
-                "memory_dim", "affect_dim")},
+                "memory_dim", "affect_dim", "entity_memory_dim")},
             **_resources(collector.world),
             appearance=collector.world.state.appearance.tolist(),
             point_generation_probability=(
@@ -102,6 +118,9 @@ class RunRecorder:
                     "choice": choice, "observation": observation,
                     "log_probability": (decision.log_prob.detach().item()
                                         if decision.log_prob is not None else None),
+                    "entity_memory": entity_memory_record(
+                        collector.network, obs.partner_appearance,
+                        decision.state_before, decision.state_after),
                     "state_before": _state(decision.state_before),
                     "state_after": _state(decision.state_after),
                 })
@@ -111,7 +130,11 @@ class RunRecorder:
                 self.death_steps[index] = collector.elapsed_steps
         self._write(
             "step", step=collector.elapsed_steps, participants=participants,
-            callbacks=callbacks, rewards=result.reward.tolist(), died=result.died.tolist(),
+            callbacks=callbacks,
+            entity_memory_completions=[dict(agent=index, **policies[index].completion)
+                                       for index in participants
+                                       if policies[index].completion is not None],
+            rewards=result.reward.tolist(), died=result.died.tolist(),
             generated_points=result.generated_points.tolist(),
             successful_transfers=[{"donor": donor, "recipient": recipient}
                                   for donor, recipient in result.successful_transfers],

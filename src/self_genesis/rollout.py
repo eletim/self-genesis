@@ -6,7 +6,7 @@ import torch
 
 from self_genesis.config import ExperimentConfig
 from self_genesis.encounter import EncounterProtocol, Observation
-from self_genesis.observation import RunRecorder
+from self_genesis.observation import RunRecorder, entity_memory_record
 from self_genesis.policy import AgentPolicy, PolicyState, RecurrentPolicy
 from self_genesis.world import Action, World
 
@@ -45,8 +45,10 @@ class Rollout:
 class _RecordingPolicy:
     """Capture callbacks without changing the policy or encounter protocol."""
 
-    def __init__(self, agent: AgentPolicy):
+    def __init__(self, agent: AgentPolicy, *, record_memory: bool = False):
         self.agent = agent
+        self.record_memory = record_memory
+        self.completion = None
         self.decisions: list[PolicyDecision] = []
 
     def _record(self, observation: Observation, *, communicating: bool):
@@ -64,6 +66,14 @@ class _RecordingPolicy:
 
     def communicate(self, observation: Observation) -> tuple[int, ...]:
         return self._record(observation, communicating=True)
+
+    def complete_encounter(self, experience) -> None:
+        before = self.agent.state
+        self.agent.complete_encounter(experience)
+        if self.record_memory:
+            self.completion = entity_memory_record(
+                self.agent.network, experience.observation.partner_appearance,
+                before, self.agent.state)
 
     def act(self, observation: Observation) -> Action:
         return self._record(observation, communicating=False)
@@ -123,7 +133,8 @@ class RolloutCollector:
         while (steps < max_steps and bool(self.world.alive.any())
                and (horizon is None or self.elapsed_steps < horizon)):
             alive = self.world.alive.tolist()
-            policies = [_RecordingPolicy(agent) for agent in self.agents]
+            policies = [_RecordingPolicy(agent, record_memory=self.recorder is not None)
+                        for agent in self.agents]
             result = self.protocol.step(policies)
             if self.recorder is not None:
                 self.recorder.record_step(self, result, policies)

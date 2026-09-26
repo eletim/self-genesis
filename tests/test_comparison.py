@@ -98,8 +98,8 @@ class ComparisonTests(unittest.TestCase):
                 run_comparison(ExperimentConfig(num_agents=2, initial_life=3,
                                                episodes=1, survival_horizon=2),
                                Path(directory) / 'report.json', evaluation_seeds=[101, 102])
-            self.assertEqual(evaluation.call_count, 8)
-            self.assertEqual(len(snapshots), 2)
+            self.assertEqual(evaluation.call_count, 10)
+            self.assertEqual(len(snapshots), 4)
 
     def test_zero_generation_extinction_and_attempts(self):
         config = ExperimentConfig(num_agents=2, initial_life=2, initial_points=1)
@@ -156,7 +156,7 @@ class ComparisonTests(unittest.TestCase):
                                            initial_life=2, initial_points=1,
                                            episodes=1, survival_horizon=2), output)
             rows = json.loads(output.read_text())['evaluations']
-            self.assertEqual(len(rows), 4)
+            self.assertEqual(len(rows), 5)
             for row in rows:
                 self.assertEqual(row['resolved_device'], 'cuda:0')
                 self.assertEqual(row['survival_returns'], [2, 2])
@@ -222,7 +222,7 @@ class ComparisonTests(unittest.TestCase):
                 output = Path(directory) / name
                 result = subprocess.run(command + ['--output', str(output)],
                                         check=True, capture_output=True, text=True)
-                self.assertEqual(json.loads(result.stdout)['evaluations'], 8)
+                self.assertEqual(json.loads(result.stdout)['evaluations'], 10)
                 reports.append(json.loads(output.read_text()))
             self.assertEqual(*reports)
             report = reports[0]
@@ -230,11 +230,12 @@ class ComparisonTests(unittest.TestCase):
             for seed in (7, 8):
                 rows = [r for r in report['evaluations'] if r['seed'] == seed]
                 self.assertEqual([r['policy'] for r in rows],
-                                 ['learned', 'always-GIVE', 'always-NOTHING',
-                                  'producer-oracle'])
+                                 ['learned', 'learned-no-entity-memory', 'always-GIVE',
+                                  'always-NOTHING', 'producer-oracle'])
                 for row in rows:
                     self.assertEqual(row['initial'], rows[0]['initial'])
-                    self.assertEqual(row['config'], rows[0]['config'])
+                    self.assertEqual({**row['config'], 'entity_memory_dim': 0},
+                                     {**rows[0]['config'], 'entity_memory_dim': 0})
                     self.assertEqual(row['survival_returns'], [2, 2, 2])
                     self.assertEqual([(r['step'], r['agent'], r['partner'])
                                       for r in row['relationship_actions']],
@@ -260,14 +261,15 @@ class ComparisonTests(unittest.TestCase):
     def test_training_and_comparison_cli_use_identical_reproducible_updates(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
-            for method in ('actor_critic', 'reinforce'):
+            for method, dimension in (('actor_critic', 5), ('reinforce', 0)):
                 with self.subTest(method=method):
                     config = path / f'{method}.toml'
-                    config.write_text(f'training_method = "{method}"\n')
+                    config.write_text(f'training_method = "{method}"\nentity_memory_dim = 9\n')
                     command = [sys.executable, '-m', 'self_genesis']
                     settings = ['--config', str(config), '--device', 'cpu', '--seed', '17',
                                 '--num-agents', '3', '--initial-life', '3', '--initial-points', '1',
                                 '--episodes', '2', '--survival-horizon', '2',
+                                '--entity-memory-dim', str(dimension),
                                 '--value-loss-coefficient', '0.7',
                                 '--action-entropy-coefficient', '0.2',
                                 '--message-entropy-coefficient', '0.3']
@@ -284,6 +286,15 @@ class ComparisonTests(unittest.TestCase):
                         reports.append(json.loads(output.read_text()))
                     self.assertEqual(*reports)
                     self.assertEqual(reports[0]['config']['training_method'], method)
+                    self.assertEqual(reports[0]['config']['entity_memory_dim'], dimension)
+                    for evaluation in reports[0]['evaluations']:
+                        events = evaluation['entity_memory_events']
+                        if evaluation['policy'].startswith('learned'):
+                            self.assertEqual(len(events), 12)
+                            expected_dim = evaluation['config']['entity_memory_dim']
+                            self.assertTrue(all(len(e['retrieved']) == expected_dim for e in events))
+                        else:
+                            self.assertEqual(events, [])
                     for update, recorded in zip(reports[0]['training'], updates, strict=True):
                         self.assertEqual(update, {key: recorded[key] for key in update})
                         self.assertEqual(update['training_method'], method)
@@ -301,3 +312,35 @@ class ComparisonTests(unittest.TestCase):
                                    '--output', str(invalid)], capture_output=True, text=True)
                     self.assertEqual(failed.returncode, 2)
                     self.assertFalse(invalid.exists())
+
+    def test_analysis_cannot_change_policy_or_training_targets(self):
+        from self_genesis.analysis import RelationshipAnalysis
+        original = RelationshipAnalysis.record_step
+
+        def poisoned_analysis(analysis, record):
+            original(analysis, record)
+            for row in analysis.rows:
+                row['prior'] = {key: 999 for key in row['prior']}
+                row['prior_third_party'] = {key: 999 for key in row['prior_third_party']}
+                row['partner_generation_probability'] = -999
+                row['partner_producer_bin'] = 'unknown'
+
+        with tempfile.TemporaryDirectory() as directory:
+            for method in ('actor_critic', 'reinforce'):
+                config = ExperimentConfig(num_agents=3, initial_life=4, episodes=2,
+                                          survival_horizon=3, training_method=method)
+                reports = []
+                for poisoned in (False, True):
+                    path = Path(directory) / f'{method}-{poisoned}.json'
+                    with patch.object(RelationshipAnalysis, 'record_step',
+                                      poisoned_analysis if poisoned else original):
+                        run_comparison(config, path)
+                    reports.append(json.loads(path.read_text()))
+                self.assertEqual(reports[0]['training_runs'], reports[1]['training_runs'])
+                for before, after in zip(reports[0]['evaluations'], reports[1]['evaluations']):
+                    for key in ('survival_returns', 'lifetimes', 'final_life', 'final_points',
+                                'action_counts', 'entity_memory_events', 'communication_messages'):
+                        self.assertEqual(before[key], after[key], key)
+                    self.assertEqual([r['action'] for r in before['relationship_actions']],
+                                     [r['action'] for r in after['relationship_actions']])
+                    self.assertNotEqual(before['partner_history_metrics'], after['partner_history_metrics'])

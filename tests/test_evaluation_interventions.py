@@ -14,6 +14,7 @@ import torch
 from self_genesis.analysis import (RelationshipAnalysis, communication_metrics,
                                    evaluation_summary)
 from self_genesis.comparison import (INTERVENTIONS, FixedPolicy, _AppearanceShuffleProtocol,
+                                     _AppearanceReplacementProtocol,
                                      evaluate_policy, run_comparison)
 from self_genesis.config import ExperimentConfig
 from self_genesis.encounter import EncounterProtocol, Observation
@@ -22,12 +23,17 @@ from self_genesis.world import Action, World
 
 
 class InterventionTests(unittest.TestCase):
-    def test_shuffle_changes_only_observed_appearance_and_preserves_rng_streams(self):
+    def test_appearance_interventions_preserve_world_and_rng_streams(self):
+        for protocol in (_AppearanceShuffleProtocol, _AppearanceReplacementProtocol):
+            with self.subTest(protocol=protocol.__name__):
+                self.check_appearance_protocol(protocol)
+
+    def check_appearance_protocol(self, protocol):
         config = ExperimentConfig(num_agents=4, initial_life=20,
                                   point_generation_probability_max=1)
         ordinary, shuffled = World(config), World(config)
         baseline = EncounterProtocol(ordinary, seed=17)
-        treatment = _AppearanceShuffleProtocol(shuffled, seed=17)
+        treatment = protocol(shuffled, seed=17)
         seen = []
 
         class Recorder(FixedPolicy):
@@ -63,6 +69,65 @@ class InterventionTests(unittest.TestCase):
             self.assertTrue(torch.equal(expected.generated_points, actual.generated_points))
         self.assertTrue(changed)
 
+    def test_replacement_preserves_world_sampling_and_policy_state(self):
+        config = ExperimentConfig(num_agents=2, initial_life=20, survival_horizon=4)
+        world = World(config)
+        network = RecurrentPolicy(config.appearance_dim)
+        original_step = EncounterProtocol.step
+        previous_states = []
+        appearances = []
+        rng_states = []
+
+        def checked_step(protocol, policies):
+            for i, wrapper in enumerate(policies):
+                if previous_states:
+                    self.assertIs(wrapper.policy.state, previous_states[i])
+            rng_states.append(torch.random.get_rng_state().clone())
+            appearances.append(protocol._appearances.clone())
+            self.assertTrue(torch.equal(protocol.world.state.appearance, world.state.appearance))
+            result = original_step(protocol, policies)
+            previous_states[:] = [w.policy.state for w in policies]
+            return result
+
+        with patch.object(EncounterProtocol, 'step', autospec=True, side_effect=checked_step):
+            report = evaluate_policy(config, network, intervention='appearance-replacement')
+        self.assertFalse(torch.equal(appearances[0], appearances[1]))
+        observed = {}
+        for event in report['entity_memory_events']:
+            key = (event['step'], event['agent'])
+            self.assertEqual(event['appearance'], observed.setdefault(key, event['appearance']))
+            step = event['step']
+            self.assertTrue(any(event['appearance'] == a.tolist() for a in appearances[step]))
+        # Replacement consumes no global policy RNG before the first callback.
+        World(config)
+        self.assertTrue(torch.equal(rng_states[0], torch.random.get_rng_state()))
+
+    def test_entity_reset_preserves_working_memory_affect_and_within_encounter_writes(self):
+        config = ExperimentConfig(num_agents=2, initial_life=20, survival_horizon=4)
+        network = RecurrentPolicy(config.appearance_dim)
+        previous_states = []
+        original_step = EncounterProtocol.step
+
+        def checked_step(protocol, policies):
+            for i, wrapper in enumerate(policies):
+                state = wrapper.policy.state
+                self.assertEqual(state.entities, ())
+                if previous_states:
+                    self.assertIs(state.memory, previous_states[i].memory)
+                    self.assertIs(state.affect, previous_states[i].affect)
+            result = original_step(protocol, policies)
+            previous_states[:] = [w.policy.state for w in policies]
+            self.assertTrue(all(len(s.entities) == 1 for s in previous_states))
+            return result
+
+        with patch.object(EncounterProtocol, 'step', autospec=True, side_effect=checked_step):
+            report = evaluate_policy(config, network, intervention='entity-memory-reset')
+        for event in report['entity_memory_events']:
+            if event['phase'] == 'message':
+                self.assertEqual(len(event['state_before']), 0)
+            else:
+                self.assertEqual(len(event['state_before']), 1)
+
     def test_memory_reset_preserves_affect_and_within_encounter_updates(self):
         config = ExperimentConfig(num_agents=2, initial_life=20, survival_horizon=4)
         network = RecurrentPolicy(config.appearance_dim)
@@ -75,6 +140,7 @@ class InterventionTests(unittest.TestCase):
 
         handle = network.register_forward_pre_hook(inspect, with_kwargs=True)
         previous_affects = []
+        previous_entities = []
         original_step = EncounterProtocol.step
 
         def checked_step(protocol, policies):
@@ -83,8 +149,11 @@ class InterventionTests(unittest.TestCase):
                 self.assertEqual(torch.count_nonzero(state.memory), 0)
                 if previous_affects:
                     self.assertTrue(torch.equal(state.affect, previous_affects[index]))
+                    self.assertIs(state.entities, previous_entities[index])
+                    self.assertEqual(len(state.entities), 1)
             result = original_step(protocol, policies)
             previous_affects[:] = [wrapper.policy.state.affect.clone() for wrapper in policies]
+            previous_entities[:] = [wrapper.policy.state.entities for wrapper in policies]
             return result
 
         with patch.object(EncounterProtocol, 'step', autospec=True, side_effect=checked_step):
@@ -182,22 +251,48 @@ class InterventionTests(unittest.TestCase):
                 reports.append(json.loads(output.read_text()))
             self.assertEqual(reports[0], reports[1])
             report, single = reports[0], reports[2]
-            self.assertEqual(len(report['evaluations']), 24)
-            self.assertEqual(len(report['summaries']), 12)
-            self.assertEqual(len(report['intervention_effects']), 8)
-            self.assertEqual(report['training_runs'][1], single['training_runs'][0])
+            self.assertEqual(len(report['evaluations']), 52)
+            self.assertEqual(len(report['summaries']), 26)
+            self.assertEqual(len(report['intervention_effects']), 32)
+            self.assertEqual(report['training_runs'][2:], single['training_runs'])
             self.assertEqual([r for r in report['evaluations'] if r['training_seed'] == 8],
                              single['evaluations'])
             self.assertEqual([r for r in report['summaries'] if r['training_seed'] == 8],
                              single['summaries'])
             for effect in report['intervention_effects']:
-                matched = [r for r in report['evaluations'] if r['policy'] == 'learned'
+                matched = [r for r in report['evaluations'] if r['policy'] == effect['policy']
                            and r['training_seed'] == effect['training_seed']
                            and r['seed'] == effect['evaluation_seed']]
                 baseline = next(r for r in matched if r['intervention'] is None)
                 changed = next(r for r in matched if r['intervention'] == effect['intervention'])
                 self.assertEqual(effect['mean_observed_lifetime_delta'],
                                  changed['mean_observed_lifetime'] - baseline['mean_observed_lifetime'])
+
+    def test_disabled_condition_is_separately_trained_with_matched_budget(self):
+        config = ExperimentConfig(num_agents=2, initial_life=4, episodes=2,
+                                  survival_horizon=3, entity_memory_dim=5)
+        with tempfile.TemporaryDirectory() as directory:
+            reports = []
+            for name, settings in [('paired', config),
+                                   ('disabled', replace(config, entity_memory_dim=0))]:
+                output = Path(directory) / f'{name}.json'
+                result = run_comparison(settings, output, training_seeds=[7],
+                                        evaluation_seeds=[101], interventions=INTERVENTIONS)
+                self.assertEqual(result['training_episodes'], 4 if name == 'paired' else 2)
+                reports.append(json.loads(output.read_text()))
+        paired, disabled = reports
+        enabled_run, disabled_run = paired['training_runs']
+        self.assertEqual(disabled_run['updates'], disabled['training_runs'][0]['updates'])
+        self.assertEqual(enabled_run['config'], {**disabled_run['config'], 'entity_memory_dim': 5})
+        self.assertEqual(len(enabled_run['updates']), len(disabled_run['updates']))
+        paired_rows = [r for r in paired['evaluations'] if r['policy'] == 'learned-no-entity-memory']
+        single_rows = [r for r in disabled['evaluations'] if r['policy'] == 'learned']
+        self.assertEqual([{**r, 'policy': 'learned'} for r in paired_rows], single_rows)
+        baseline = next(r for r in paired_rows if r['intervention'] is None)
+        reset = next(r for r in paired_rows if r['intervention'] == 'entity-memory-reset')
+        self.assertEqual({**reset, 'intervention': None}, baseline)
+        self.assertTrue(all(r['seed'] == 101 for r in paired['evaluations']))
+        self.assertTrue(all(r['initial'] == baseline['initial'] for r in paired['evaluations']))
 
     def test_invalid_conditions_do_not_create_output(self):
         with tempfile.TemporaryDirectory() as directory:

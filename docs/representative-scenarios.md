@@ -3,7 +3,9 @@
 These scenarios are durable examples of the behavior self-genesis is intended to study.
 They are not fixed expected outputs and should not be treated as hard-coded policies for the agents.
 The v0.0.4 resource rules follow the [Issue #15 design contract](design-principles.md),
-including its step order; implementation belongs to subsequent work items.
+including its step order, and remain in force for v0.0.6.
+The v0.0.6 Entity Memory examples follow the same design contract; they specify intended
+behavior, not completed implementation or guaranteed learning outcomes.
 
 ## 1. 他者からのみLifeを回復できる
 
@@ -18,6 +20,10 @@ Agent Aが、以前会ったAgent Bと再びEncounterする。
 
 Bの明示的なIDは入力されず、固定Appearanceと過去の内部状態・記憶を手掛かりに、
 以前の相互作用を現在の判断へ利用できる余地がある。
+v0.0.6では、AはBの観測Appearanceを手掛かりにEntity Memoryのlatent valueを取り出し、
+Working Memory・感性と合わせて判断に利用できる。間にCとのEncounterがあっても、
+Bとの経験を取り出せる構造を用意するが、返報や協力を必須の結果にはしない。
+valueに「Bは協力的」といった正解ラベルを与えず、生存の結果から学習する。
 
 ## 3. GIVEは直接Rewardされない
 
@@ -67,7 +73,9 @@ AはBやCとのランダムな再Encounterで、固定Appearance、観測したP
 以前に受けた援助や受けなかった経験、自分が援助した経験を現在の判断へ利用できる。
 生成能力が高い相手が必ずGIVEするわけではなく、Point不足でGIVEできなかった場合もある。
 誰を生かすと将来の自分の生存に有利かを学習できる余地を調べ、特定の選別方策を正解にはしない。
-既存のWorking Memory・感性・Communication・NN構造でこの比較を行う。
+v0.0.5では既存のWorking Memory・感性・Communication・NN構造でこの比較を行い、
+Entity Memoryは追加しなかった。v0.0.6ではWorking Memory・感性・Communicationを維持し、
+Appearanceから検索するEntity Memoryを追加して同じ環境・Actor-Criticで調べる。
 
 ## 9. 生成は当該stepのGIVEや死亡判定に先回りしない
 
@@ -90,3 +98,16 @@ Encounterに選ばれなかった生存個体にも同じLife減少・死亡判�
 生存期間はhorizonで打ち切られた値として記録する。
 always GIVE / always NOTHINGとの比較にも同じhorizonと環境規則を用い、
 学習方策の優位や協力の成立をシナリオの必須結果とはしない。
+
+## 11. 記憶slotや解析ログから相手の正解を得ない（v0.0.6）
+
+AがBとCの経験を異なる記憶slotへ保存しても、slot番号をpolicy inputや相手のidentity labelにしない。
+再Encounterで検索の手掛かりになるのは観測Appearanceであり、world内のAgent番号ではない。
+BとCが同じAppearanceなら、隠れたIDを使って両者の記憶を選び分けることはできない。
+解析ログにBの生成能力・実際の生成量・相手別の援助履歴があっても、
+Actor / Criticへ渡したり、Entity Memoryのvalueをそのログで埋めたりしない。
+Aが通常の観測と相互作用から得た経験だけで、ラベルなしのlatent valueを学習する。
+
+episodeが変わればAのEntity Memoryもresetし、前episodeや他個体の経験を引き継がない。
+Working Memoryと感性の循環、意味を事前定義しないCommunication、ランダムなEncounter、
+Point再生成、survival-onlyのActor-Criticは引き続き維持する。

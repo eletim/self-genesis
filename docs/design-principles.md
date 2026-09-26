@@ -13,7 +13,7 @@ self-genesis は、複数の学習Agentが他者との相互作用を通じて�
 
 本書と[代表シナリオ](representative-scenarios.md)は、
 [Issue #15](https://github.com/eletim/self-genesis/issues/15)で導入する環境の契約を定める。
-再生成・有限horizon・解析ログを含むこの環境契約はv0.0.5でも維持する。
+再生成・有限horizon・解析ログを含むこの環境契約はv0.0.5 / v0.0.6でも維持する。
 v0.0.3の初期Pointを使い切る環境と比較し、他者を区別して過去の関係を利用することが
 生存上有利になり得る環境圧を調べる。援助相手の選別や協力が必ず学習されるとは仮定しない。
 
@@ -25,6 +25,14 @@ always GIVEを上回る一方、学習済みNNがalmost-always-GIVE / almost-alw
 Value baseline・Advantage・Entropyにより早期collapseを抑え、条件依存の行動と
 held-out survivalが改善するかを検証する。改善や協力の獲得を前提にはしない。
 以下は最小限のActor-Criticへ拡張するための契約であり、この文書変更自体は実装完了を意味しない。
+
+## v0.0.6 のEntity Memory契約
+
+v0.0.6では、固定Appearanceを手掛かりに過去の相互作用を取り出す最小限のEntity Memoryを追加する。
+Working Memoryを置き換えず、感性latentの循環、Communication、ランダムなEncounter、
+renewable resource worldと有限horizon、survival-onlyのActor-Criticを維持する。
+変更対象は記憶構造であり、援助・返報・協力の獲得や生存性能の改善を保証しない。
+以下は設計契約であり、この文書変更自体はEntity Memoryの実装完了を意味しない。
 
 ## 1. シンプルさを優先する
 
@@ -144,6 +152,24 @@ NNには、時間をまたいで更新されるWorking Memoryを持たせる。
 
 Working Memoryの具体的な次元数や実装方式は固定せず、実験対象とする。
 
+### Entity Memory（v0.0.6）
+
+Entity Memoryは、個体ごとの経験をAppearanceに結び付けて保持する補助的な記憶とする。
+現在の相手の観測Appearanceを検索の手掛かりにし、取り出したlatent valueを
+Working Memory・感性とともに次の判断と記憶更新へ利用する。
+記憶するvalueは、観測と相互作用からsurvival-onlyのActor-Criticで学習するラベルなしの内部表現であり、
+「協力的」「信用できる」「高い生成能力」などの正解値や、手書きの相手評価を与えない。
+個体ごとのEntity Memoryを混同せず、episode境界でresetする。
+
+検索を明示的な個体IDや自己・他者のidentity labelで行わない。
+同じAppearanceを持つ相手を、隠れたIDで区別して検索してはならない。
+実装上の記憶slot番号やworld内のAgent番号を相手の識別子として使わず、
+これらの番号・identity labelをActor / Criticのpolicy inputへ渡さない。
+生成能力、実際の生成量、解析専用の相手別履歴やoracle情報などの特権情報も、
+直接入力にも記憶の検索・書き込みを経由する入力にも使わない。
+利用できる経験は、その個体が通常のObservation・Communication・行動を通して得たものに限る。
+検索・保存方式や容量の詳細はここでは固定せず、この情報境界を守る最小構成を実装対象とする。
+
 ## 9. 感性を循環する内部状態として扱う
 
 NN内部には「感性」に相当するlatent stateを持たせる。
@@ -181,6 +207,8 @@ Observation、Working Memory、感性、思考は一方向のpipelineではな�
 学習アルゴリズムも固定的な思想として扱わず、
 この環境でend-to-endに学習できる妥当な方法を選ぶ。
 
+### v0.0.5での変更範囲（歴史的な制約）
+
 v0.0.4のREINFORCEを比較元とし、v0.0.5では各個体のsurvival-only reward-to-goを
 維持した最小限のActor-Criticへ拡張する。以下のValue head以外は、既存のNN形状・次元、
 Observation、Working Memory、感性latentの循環、Communication構造を維持する。
@@ -188,6 +216,11 @@ renewable resource worldの規則、Encounterの順序、固定Appearanceも変�
 Working Memoryのentity / associative memory化、NNの大型化や別architecture化、
 world ruleの再設計、自己・他者のidentity label追加、supervised auxiliary taskは行わない。
 PPOのclippingや旧policyとの比率を用いる更新など、大規模な学習方式変更も対象外とする。
+
+上記のNN形状維持とentity / associative memory化の禁止は、学習則だけを比較するv0.0.5の制約である。
+v0.0.6では第8節のEntity Memory追加を許容するが、identity labelやsupervised auxiliary taskは
+引き続き導入しない。以下のActor-Criticのreturn・loss・収集境界の契約は維持し、
+Actor / Criticは通常の観測と許可された個体固有の記憶表現のみを利用する。
 
 ### Survival returnとValue baseline
 

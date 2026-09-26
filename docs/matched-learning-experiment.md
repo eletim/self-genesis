@@ -54,6 +54,12 @@ in the reports and described in [the comparison guide](../README.md#matched-poli
 
 ## Reproduction and retained evidence
 
+These are historical schema-v2 commands. Run them from the recorded v0.0.5
+checkout (for example, extract `git archive 8487da27cad2010c4eef6787d7bb32cce584c305`
+into a fresh directory), not the current default, which trains two memory
+conditions and emits schema v3. For current procedures and a verified match to
+the historical disabled-memory behavior, see [Entity Memory validation](entity-memory-experiment.md).
+
 Recorded on Linux x86_64, Python **3.12.14**, PyTorch **2.7.1+cpu**. Use the
 [pinned CPU environment recipe](minimal-experiment.md#small-cpu-run), then run
 from this checkout with `PYTHONPATH=src`. The two full schema-v2 reports are

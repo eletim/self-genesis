@@ -624,6 +624,29 @@ samples only within one training seed, policy, and intervention:
   and the difference is null if either group has no samples. Only earlier steps
   enter history, even for the second action callback. This is descriptive dependence,
   not a causal estimate; actual identity, abilities, and histories stay analysis-only.
+- `partner_history_metrics` conditions subsequent GIVE separately on earlier
+  received and outgoing aid, with distinct attempt and successful-transfer bins.
+  Direct conditions use repeat encounters. Third-party conditions use all
+  encounters and count each participant's earlier incoming/outgoing aid with
+  agents outside the current pair. Histories use actual directed identities,
+  reset each episode, and exclude all current-step events.
+  Each condition has `positive`, `zero`, and `unknown` bins and a
+  `positive_minus_zero_give` difference. Missing transfer records propagate
+  unknown success counts, while attempts remain countable.
+- `partner_history_metrics.partner_producers` compares GIVE **to** high versus
+  low producers separately at `first` and `repeat` encounters. High means the
+  partner's fixed generation probability is strictly above the midpoint of the
+  episode population's minimum and maximum probabilities; low includes ties.
+  The row records this `producer_midpoint` and `partner_producer_bin`.
+  Equal abilities leave high empty; missing abilities form an `unknown` bin.
+  `high_minus_low_give` is reported for each encounter group, followed by
+  `repeat_minus_first_producer_difference`. These are descriptive associations,
+  not causal estimates or learning targets.
+- All new bins include `action_callbacks` sample counts, action counts and
+  fractions, successful aid totals, `successful_aid_known_samples`, and an
+  explicit `missing_bin`. Empty fractions and differences lacking either
+  comparison bin are null. Samples are callbacks, not independent agents.
+  Metrics appear per evaluation, in pooled summaries, and in offline analysis.
 - Communication reports callback and nonempty-message counts, token counts, mean
   length, and empirical token entropy in bits. Entropy is null with no tokens;
   mean length is null with no callbacks. Empty messages are counted, including a

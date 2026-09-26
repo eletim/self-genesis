@@ -8,7 +8,7 @@ import sys
 
 # Keep this standard-library script runnable without installing the package.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from self_genesis.analysis import RelationshipAnalysis
+from self_genesis.analysis import RelationshipAnalysis, partner_history_metrics
 
 
 def analyze(path):
@@ -45,6 +45,7 @@ def analyze(path):
                     'token_counts': summary['token_counts'],
                     'final_life': summary['life'], 'final_points': summary['points'],
                     'relationship_actions': relationships.rows,
+                    'partner_history_metrics': partner_history_metrics(relationships.rows),
                 }
                 episodes += 1
                 expected = start['settings']['episodes']

@@ -8,6 +8,7 @@ import random
 import torch
 
 from self_genesis.analysis import (RelationshipAnalysis, action_metrics,
+                                   partner_history_metrics,
                                    communication_metrics, evaluation_summary,
                                    relationship_metrics)
 from self_genesis.config import ExperimentConfig
@@ -249,6 +250,7 @@ def evaluate_policy(config: ExperimentConfig,
         final_life=world.state.life.tolist(), final_points=world.state.points.tolist(),
         **action_metrics(rows), relationship_actions=rows, history_key="actual_partner",
         relationship_metrics=relationship_metrics(rows),
+        partner_history_metrics=partner_history_metrics(rows),
         entity_memory_events=memory_history,
         communication_messages=messages,
         communication=communication_metrics([row['message'] for row in messages],
@@ -351,6 +353,16 @@ def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=N
                                   'partner indices and history are analysis-only. Prior-aid GIVE '
                                   'difference compares previously aided with encountered-but-unaided '
                                   'partners, excluding unseen partners; null if either bin is empty.',
+                          partner_history='Prior direct aid conditions use repeat encounters; '
+                                          'third-party conditions exclude both participants from '
+                                          'the other-agent set and use all encounters. Attempts '
+                                          'and successful transfers are separate, with positive, '
+                                          'zero and unknown bins. Partner producers are high above '
+                                          'the episode population ability midrange, low otherwise. '
+                                          'High-minus-low GIVE is reported for first and repeat '
+                                          'encounters, then repeat minus first. Each bin reports '
+                                          'callback counts and missing_bin; empty rates and '
+                                          'unsupported differences are null.',
                           communication='Counts and empirical token entropy over sent messages, '
                                         'including empty-message callbacks. These measure channel '
                                         'usage, not causal utility.',

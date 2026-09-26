@@ -4,18 +4,22 @@ import math
 
 
 class RelationshipAnalysis:
-    """Episode-local directed histories, keyed by Appearance by default.
+    """Episode-local directed histories, keyed by actual partner by default.
 
-    Evaluations may key by actual partner to retain true history under Appearance
-    interventions and collisions. Identity and history remain analysis-only.
+    Actual identities retain true history under Appearance interventions and
+    collisions. Legacy callers can opt into Appearance keys. All history is
+    analysis-only.
     """
 
-    def __init__(self, start, *, history_by_partner=False):
+    def __init__(self, start, *, history_by_partner=True):
         self.history_by_partner = history_by_partner
         self.appearance = start['appearance']
         self.probability = start.get('point_generation_probability')
         self.generated = [0] * len(self.appearance)
         self.history = {}
+        self.directed_aid = {}
+        self.producer_midpoint = (None if self.probability is None else
+                                  (min(self.probability) + max(self.probability)) / 2)
         self.rows = []
         self.last_step = -1
 
@@ -40,6 +44,11 @@ class RelationshipAnalysis:
                 'step': record['step'], 'agent': agent, 'partner': partner,
                 'partner_appearance': appearance, 'action': callback['choice'],
                 'successful_aid': success,
+                'partner_producer_bin': (
+                    'unknown' if self.probability is None else
+                    'high' if self.probability[partner] > self.producer_midpoint else 'low'),
+                'producer_midpoint': self.producer_midpoint,
+                'prior_third_party': self._third_party_history(agent, partner),
                 'agent_generation_probability': (
                     None if self.probability is None else self.probability[agent]),
                 'partner_generation_probability': (
@@ -62,10 +71,30 @@ class RelationshipAnalysis:
                 updated[field] = (None if aided is None or prior[field] is None
                                   else prior[field] + aided)
             self.history[key] = updated
+        for _, _, agent, partner, action, success in pending:
+            attempts, aid = self.directed_aid.get((agent, partner), (0, 0))
+            self.directed_aid[agent, partner] = (
+                attempts + (action == 'GIVE'),
+                None if aid is None or success is None else aid + success)
         generated = record.get('generated_points')
         self.generated = [
             None if generated is None or total is None else total + generated[i]
             for i, total in enumerate(self.generated)]
+
+    def _third_party_history(self, agent, partner):
+        """Prior directed aid involving either participant and anyone else."""
+        result = {}
+        for name, focal in (('agent', agent), ('partner', partner)):
+            for direction in ('received', 'outgoing'):
+                pairs = [(other, focal) if direction == 'received' else (focal, other)
+                         for other in range(len(self.appearance))
+                         if other not in (agent, partner)]
+                histories = [self.directed_aid.get(pair, (0, 0)) for pair in pairs]
+                result[f'{name}_{direction}_give_attempts'] = sum(h[0] for h in histories)
+                result[f'{name}_{direction}_aid'] = (
+                    None if any(h[1] is None for h in histories)
+                    else sum(h[1] for h in histories))
+        return result
 
 
 def action_metrics(rows):
@@ -75,19 +104,59 @@ def action_metrics(rows):
     return dict(action_counts=counts, action_callbacks=len(rows),
                 action_ratios={key: count / len(rows) if rows else None
                                for key, count in counts.items()},
-                successful_aid=sum(row['successful_aid'] for row in rows))
+                successful_aid=(None if any(row['successful_aid'] is None for row in rows)
+                                else sum(row['successful_aid'] for row in rows)),
+                successful_aid_known_samples=sum(row['successful_aid'] is not None for row in rows),
+                missing_bin=not rows)
 
 
 def relationship_metrics(rows):
     """Descriptive conditions determined exclusively by earlier encounters."""
     conditions = {
         'unseen_partner': [r for r in rows if r['prior']['encounters'] == 0],
-        'previously_received_aid': [r for r in rows if r['prior']['received_aid'] > 0],
+        'previously_received_aid': [r for r in rows if r['prior']['received_aid'] is not None
+                                    and r['prior']['received_aid'] > 0],
         'encountered_without_received_aid': [r for r in rows
                                              if r['prior']['encounters'] > 0
                                              and r['prior']['received_aid'] == 0],
     }
     return {key: action_metrics(items) for key, items in conditions.items()}
+
+
+def partner_history_metrics(rows):
+    """Subsequent GIVE by prior aid; samples are action callbacks, not agents."""
+    histories = {}
+    fields = [('prior', field) for field in (
+        'received_give_attempts', 'received_aid', 'outgoing_give_attempts', 'outgoing_aid')]
+    fields += [('prior_third_party', f'{who}_{direction}_{kind}')
+               for who in ('agent', 'partner') for direction in ('received', 'outgoing')
+               for kind in ('give_attempts', 'aid')]
+    for source, field in fields:
+        # Direct histories compare repeat encounters only; third-party histories
+        # can already exist at a first meeting of this pair.
+        eligible = [r for r in rows if source != 'prior' or r['prior']['encounters'] > 0]
+        bins = {'positive': [], 'zero': [], 'unknown': []}
+        for row in eligible:
+            value = row.get(source, {}).get(field)
+            bins['unknown' if value is None else 'positive' if value > 0 else 'zero'].append(row)
+        metrics = {name: action_metrics(items) for name, items in bins.items()}
+        positive = metrics['positive']['action_ratios']['GIVE']
+        zero = metrics['zero']['action_ratios']['GIVE']
+        histories[f'{source}.{field}'] = dict(
+            bins=metrics, positive_minus_zero_give=(
+                None if positive is None or zero is None else positive - zero))
+    producers = {}
+    for encounter in ('first', 'repeat'):
+        selected = [r for r in rows if (r['prior']['encounters'] == 0) == (encounter == 'first')]
+        bins = {name: action_metrics([r for r in selected if r.get('partner_producer_bin', 'unknown') == name])
+                for name in ('high', 'low', 'unknown')}
+        high, low = (bins[name]['action_ratios']['GIVE'] for name in ('high', 'low'))
+        producers[encounter] = dict(
+            bins=bins, high_minus_low_give=None if high is None or low is None else high - low)
+    first, repeat = (producers[name]['high_minus_low_give'] for name in ('first', 'repeat'))
+    return dict(histories=histories, partner_producers=producers,
+                repeat_minus_first_producer_difference=(
+                    None if first is None or repeat is None else repeat - first))
 
 
 def communication_metrics(messages, vocabulary_size):
@@ -124,5 +193,6 @@ def evaluation_summary(evaluations, vocabulary_size):
         mean_observed_lifetime=observed_mean,
         mean_survival_time=None if censored else observed_mean,
         relationship_metrics=history,
+        partner_history_metrics=partner_history_metrics(rows),
         prior_aid_give_difference=None if aided is None or unaided is None else aided - unaided,
         communication=communication_metrics(messages, vocabulary_size))

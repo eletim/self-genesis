@@ -113,3 +113,85 @@ class AnalysisTests(unittest.TestCase):
             events[2]['step'] = number
             with self.assertRaisesRegex(ValueError, 'strictly increasing'):
                 self.analyze_episodes([events])
+
+    def test_third_party_histories_are_directed_strictly_prior_and_reset(self):
+        events = episode([
+            step(0, [0, 2], ['GIVE', 'GIVE'], [(2, 0)]),
+            step(1, [1, 2], ['GIVE', 'NOTHING'], [(1, 2)]),
+            step(2, [0, 1], ['GIVE', 'NOTHING'], [(0, 1)]),
+            step(3, [1, 0], ['GIVE', 'NOTHING']),
+        ])
+        reports = self.analyze_episodes([events, episode([step(0, [0, 1], ['GIVE', 'GIVE'])])])
+        rows = reports[0]['relationship_actions']
+        self.assertTrue(all(value == 0 for value in rows[0]['prior_third_party'].values()))
+        prior = rows[4]['prior_third_party']
+        self.assertEqual(prior, dict(
+            agent_received_give_attempts=1, agent_received_aid=1,
+            agent_outgoing_give_attempts=1, agent_outgoing_aid=0,
+            partner_received_give_attempts=0, partner_received_aid=0,
+            partner_outgoing_give_attempts=1, partner_outgoing_aid=1))
+        # Current pair's aid is excluded even on later encounters.
+        self.assertEqual(rows[7]['prior_third_party'], prior)
+        self.assertTrue(all(value == 0 for value in
+                            reports[1]['relationship_actions'][0]['prior_third_party'].values()))
+        metrics = reports[0]['partner_history_metrics']['histories']
+        received = metrics['prior.received_aid']
+        self.assertEqual(received['bins']['positive']['action_callbacks'], 1)
+        self.assertEqual(received['bins']['zero']['action_callbacks'], 1)
+        self.assertEqual(received['positive_minus_zero_give'], 1)
+        self.assertEqual(metrics['prior.outgoing_aid']['positive_minus_zero_give'], -1)
+        attempts = metrics['prior_third_party.agent_outgoing_give_attempts']['bins']['positive']
+        aid = metrics['prior_third_party.agent_outgoing_aid']['bins']['positive']
+        self.assertGreater(attempts['action_callbacks'], aid['action_callbacks'])
+
+    def test_producer_differences_first_repeat_and_missing_bins(self):
+        events = episode([
+            step(0, [0, 2], ['GIVE', 'NOTHING']),
+            step(1, [2, 0], ['GIVE', 'NOTHING']),
+        ])
+        metrics = self.analyze_episodes([events])[0]['partner_history_metrics']
+        producers = metrics['partner_producers']
+        self.assertEqual(producers['first']['high_minus_low_give'], 1)
+        self.assertEqual(producers['repeat']['high_minus_low_give'], -1)
+        self.assertEqual(metrics['repeat_minus_first_producer_difference'], -2)
+        self.assertEqual(producers['first']['bins']['high']['action_callbacks'], 1)
+        self.assertTrue(producers['first']['bins']['unknown']['missing_bin'])
+        self.assertIsNone(producers['first']['bins']['unknown']['action_ratios']['GIVE'])
+        events[0]['point_generation_probability'] = [0.5] * 3
+        metrics = self.analyze_episodes([events])[0]['partner_history_metrics']
+        self.assertTrue(metrics['partner_producers']['first']['bins']['high']['missing_bin'])
+        self.assertIsNone(metrics['repeat_minus_first_producer_difference'])
+
+    def test_unknown_aid_is_not_zero_and_empty_samples_are_explicit(self):
+        from self_genesis.analysis import action_metrics, partner_history_metrics, relationship_metrics
+        events = episode([step(0, [0, 2], ['GIVE', 'NOTHING']),
+                          step(1, [0, 2], ['GIVE', 'NOTHING']),
+                          step(2, [0, 1], ['GIVE', 'NOTHING'])])
+        del events[0]['point_generation_probability']
+        del events[1]['successful_transfers']
+        report = self.analyze_episodes([events])[0]
+        rows = report['relationship_actions']
+        self.assertIsNone(rows[4]['prior_third_party']['agent_outgoing_aid'])
+        metrics = report['partner_history_metrics']
+        bins = metrics['histories']['prior.outgoing_aid']['bins']
+        self.assertEqual(bins['unknown']['action_callbacks'], 2)
+        self.assertEqual(bins['unknown']['successful_aid_known_samples'], 2)
+        self.assertEqual(bins['unknown']['successful_aid'], 0)
+        self.assertIsNone(action_metrics(rows)['successful_aid'])
+        self.assertEqual(action_metrics(rows)['successful_aid_known_samples'], 4)
+        self.assertTrue(bins['zero']['missing_bin'])
+        self.assertEqual(relationship_metrics(rows)['previously_received_aid']['action_callbacks'], 0)
+        self.assertEqual(metrics['partner_producers']['first']['bins']['unknown']['action_callbacks'], 4)
+        empty = partner_history_metrics([])
+        self.assertIsNone(empty['repeat_minus_first_producer_difference'])
+        self.assertTrue(empty['histories']['prior.received_aid']['bins']['positive']['missing_bin'])
+
+    def test_duplicate_appearances_do_not_merge_partner_history(self):
+        events = episode([step(0, [0, 1], ['GIVE', 'NOTHING'], [(0, 1)]),
+                          step(1, [0, 2], ['GIVE', 'NOTHING'])])
+        for event in events[1:3]:
+            for callback in event['callbacks']:
+                callback['observation']['partner_appearance'] = [0.1]
+        rows = self.analyze_episodes([events])[0]['relationship_actions']
+        self.assertEqual(rows[2]['prior']['encounters'], 0)
+        self.assertEqual(rows[2]['prior']['outgoing_aid'], 0)

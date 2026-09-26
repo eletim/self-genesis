@@ -1,4 +1,4 @@
-"""Initialize agents or run bounded survival training experiments."""
+"""Initialize agents, train survival policies, or compare fixed baselines."""
 
 import argparse
 from dataclasses import asdict
@@ -6,14 +6,18 @@ import json
 from pathlib import Path
 
 from self_genesis.config import load_config
+from self_genesis.comparison import run_comparison
 from self_genesis.experiment import initialize
 from self_genesis.training import run_training
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", nargs="?", choices=("init", "train"), default="init")
-    parser.add_argument("--output", type=Path, help="New JSONL results file (required for train)")
+    parser.add_argument("command", nargs="?", choices=("init", "train", "compare"), default="init")
+    parser.add_argument("--output", type=Path,
+                        help="New results file (train: JSONL; compare: JSON)")
+    parser.add_argument("--evaluation-seeds", type=int, nargs="+",
+                        help="Matched comparison seeds (default: configured seed)")
     for name in ("num_agents", "appearance_dim", "initial_life", "initial_points",
                  "vocabulary_size", "max_message_length", "memory_dim", "affect_dim",
                  "episodes", "survival_horizon"):
@@ -25,15 +29,21 @@ def main() -> None:
     parser.add_argument("--seed", type=int, help="Override the configured seed")
     parser.add_argument("--device", choices=("cpu", "cuda", "auto"))
     args = parser.parse_args()
-    if args.command == "train" and args.output is None:
-        parser.error("train requires --output pointing to a new JSONL file")
+    if args.command in ("train", "compare") and args.output is None:
+        parser.error(f"{args.command} requires --output pointing to a new results file")
     if args.command == "init" and args.output is not None:
-        parser.error("--output is only supported for train")
+        parser.error("--output is only supported for train or compare")
+    if args.command != "compare" and args.evaluation_seeds is not None:
+        parser.error("--evaluation-seeds is only supported for compare")
     overrides = vars(args).copy()
-    for key in ("command", "output", "config"):
+    for key in ("command", "output", "config", "evaluation_seeds"):
         overrides.pop(key)
     try:
         config = load_config(args.config, **overrides)
+        if args.command == "compare":
+            result = run_comparison(config, args.output, evaluation_seeds=args.evaluation_seeds)
+            print(json.dumps(result, sort_keys=True))
+            return
         if args.command == "train":
             result = run_training(config, args.output)
             print(json.dumps(result, sort_keys=True))

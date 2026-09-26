@@ -385,3 +385,44 @@ are world state, never policy inputs. Appearance, ability, and generation use
 separate seeded streams with matching CPU/CUDA resource draws. Collector resets
 restore the configured population and abilities while continuing generation,
 encounter, and policy sampling streams; recreating a collector replays the run.
+
+## Matched fixed-policy comparisons
+
+```sh
+python -m self_genesis compare --config configs/renewable.toml --device cpu \
+  --episodes 2 --survival-horizon 100 --seed 42 --evaluation-seeds 101 102 \
+  --output comparison.json
+```
+
+`compare` trains one shared network for the configured number of episodes using
+only the existing survival objective. It then freezes the weights and evaluates
+learned, always-GIVE, and always-NOTHING populations separately for every
+`--evaluation-seeds` value (default: the configured seed). Each evaluation starts
+with fresh agent memory and a fresh world under identical resources, generation
+probabilities, channel limits, horizon, and seed. Fixed policies send empty
+messages; GIVE is attempted on every encounter, even without Points. All policies
+use the existing encounter sampling, simultaneous transfer, decay, death, and
+post-decay generation rules. Sampling streams restart for each policy; realized
+encounters and generation draws can diverge as survival populations diverge.
+Learned actions remain sampled, with no learning during evaluation.
+
+The new JSON output file contains training settings and update results, evaluation
+seeds, initial Appearances and generation abilities, and one result per policy and
+seed. Results include per-agent survival returns and censored lifetimes, deaths,
+final resources, action counts/fractions, successful aid counts, and the existing
+prior-relationship action rows. `relationship_metrics` groups action counts,
+fractions, and successful aid by unseen partners, previously received aid, and
+previously encountered partners without received aid. Only earlier steps determine
+these groups; empty groups have null fractions. Action denominators count encounter
+callbacks, including failed GIVE attempts, and exclude nonparticipants. Survivors
+at the horizon remain censored; mean survival time is reported only at extinction.
+These are descriptive comparisons, with no prescribed learned behavior or added
+rewards. Repeatability applies within the same device and software environment.
+
+For the initial-Points-only comparison, use the same command with
+`--point-generation-probability-min 0 --point-generation-probability-max 0` and a
+new output filename. Keep the other settings and seeds unchanged when comparing
+resource regimes. Zero generation also supports omission of the horizon, running
+to extinction; renewable comparison requires an explicit horizon. Existing output
+files are never overwritten. The comparison JSON is separate from training JSONL
+and does not go through `examples/analyze_run.py`.

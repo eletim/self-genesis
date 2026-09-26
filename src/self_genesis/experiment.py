@@ -1,4 +1,4 @@
-"""Initialize independent agent state; dynamics and learning come later."""
+"""Initialize independent agent state for a shared survival world."""
 
 from dataclasses import dataclass
 import random

@@ -19,6 +19,8 @@ def main() -> None:
                  "episodes"):
         parser.add_argument("--" + name.replace("_", "-"), type=int)
     parser.add_argument("--learning-rate", type=float)
+    parser.add_argument("--point-generation-probability-min", type=float)
+    parser.add_argument("--point-generation-probability-max", type=float)
     parser.add_argument("--config", type=Path, help="TOML experiment conditions")
     parser.add_argument("--seed", type=int, help="Override the configured seed")
     parser.add_argument("--device", choices=("cpu", "cuda", "auto"))

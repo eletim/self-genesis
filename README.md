@@ -311,7 +311,7 @@ python -m self_genesis train --config configs/default.toml --device cpu \
 
 The default command (or explicit `init`) still prints initialization JSON.
 `train` builds one shared recurrent network and Adam optimizer and performs
-exactly `episodes` complete survival-policy updates. Each episode is bounded by
+exactly `episodes` complete survival-policy updates. With zero generation, each episode is bounded by
 `initial_life + num_agents * initial_points` world steps, so there is no
 truncation bootstrap or open-ended loop. Full episode graphs are held in memory;
 keep resource budgets small for exploratory runs.
@@ -319,7 +319,8 @@ keep resource budgets small for exploratory runs.
 All flat TOML settings can also be overridden with hyphenated CLI flags:
 `--num-agents`, `--appearance-dim`, `--initial-life`, `--initial-points`,
 `--vocabulary-size`, `--max-message-length`, `--memory-dim`, `--affect-dim`,
-`--episodes`, `--learning-rate`, `--seed`, and `--device`.
+`--episodes`, `--learning-rate`, `--seed`, `--device`,
+`--point-generation-probability-min`, and `--point-generation-probability-max`.
 Vocabulary, memory, affect dimensions, and episode count must be positive
 integers. Message length must be a nonnegative integer; zero disables messages.
 Learning rate must be finite and positive. Defaults are listed in the sample
@@ -339,3 +340,24 @@ the recorder after collector construction, so only the requested episodes are
 recorded, numbered from zero, each with a summary and training result. Read it with
 `json.loads(line)` for each line. It is observation data, not a model checkpoint.
 If interrupted, flushed records remain accessible but the run may be incomplete.
+
+### Renewable Points
+
+`configs/renewable.toml` enables scarce renewable Points for bounded
+`RolloutCollector.collect(max_steps=...)` experiments. Each agent samples a
+lifetime-fixed probability uniformly between `point_generation_probability_min`
+and `point_generation_probability_max` (inclusive bounds in [0, 1]). Equal bounds
+set a constant probability; both zero reproduce the initial-Points-only world.
+The fields also have matching CLI flags. Defaults remain zero for compatibility
+with the existing extinction-based trainer; finite-horizon training is a separate
+work item, and the trainer's initial-resource step bound does not support renewable
+experiments yet.
+
+After simultaneous GIVE, Life decay, and death resolution, every survivor draws
+0 or 1 new Point, including agents outside the Encounter and lone survivors.
+`StepResult.generated_points` reports actual generation. New Points can only be
+observed or spent next step and can only restore another agent's Life. Abilities
+are world state, never policy inputs. Appearance, ability, and generation use
+separate seeded streams with matching CPU/CUDA resource draws. Collector resets
+restore the configured population and abilities while continuing generation,
+encounter, and policy sampling streams; recreating a collector replays the run.

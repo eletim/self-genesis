@@ -200,6 +200,19 @@ Set it to `0` in TOML or pass `--entity-memory-dim 0` to disable Entity Memory a
 recover the v0.0.5 layer shapes, initialization, and forward computation. The
 existing `working-memory-reset` intervention resets only Working Memory.
 
+Training JSONL states include `entity_memory` entries with observed `appearance`
+and latent `value`. Each callback's `entity_memory` records its `retrieved` value
+and entry lists in `state_before` and `state_after`; step-level
+`entity_memory_completions` records the additional resolved-encounter writes,
+before death resets. Comparison evaluations expose the same snapshots in
+`entity_memory_events`, tagged by step, logging agent index, and phase (`message`,
+`action`, or `completion`). Fixed/oracle policies have no memory events; disabled
+Entity Memory records empty retrievals and entry lists. These additive fields are
+detached JSON values, separate from differentiable rollout states. Logging IDs,
+hidden generation abilities, and analysis histories never feed policy inputs or
+memory writes. Existing action, survival, communication, and training outputs
+retain their meanings. Trace size grows with observed Appearances and callbacks.
+
 The communication head samples independent tokens from one categorical
 distribution for a fixed-length message; the action head samples GIVE or
 NOTHING. Match the network's `vocabulary_size` and `max_message_length` to the

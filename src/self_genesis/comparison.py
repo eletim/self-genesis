@@ -13,6 +13,7 @@ from self_genesis.analysis import (RelationshipAnalysis, action_metrics,
 from self_genesis.config import ExperimentConfig
 from self_genesis.encounter import EncounterProtocol, Observation
 from self_genesis.experiment import resolve_device
+from self_genesis.observation import entity_memory_record
 from self_genesis.policy import AgentPolicy, PolicyState, RecurrentPolicy
 from self_genesis.rollout import RolloutCollector
 from self_genesis.training import train_episode
@@ -102,23 +103,37 @@ class ProducerOracle:
 
 
 class _EvaluationRecorder:
-    def __init__(self, policy, index, callbacks):
+    def __init__(self, policy, index, callbacks, memory_events):
         self.policy = policy
         self.index = index
         self.callbacks = callbacks
+        self.memory_events = memory_events
+
+    def _record_memory(self, observation, before, phase):
+        if isinstance(self.policy, AgentPolicy):
+            self.memory_events.append(dict(
+                agent=self.index, phase=phase,
+                **entity_memory_record(self.policy.network, observation.partner_appearance,
+                                       before, self.policy.state)))
 
     def communicate(self, observation):
+        before = self.policy.state if isinstance(self.policy, AgentPolicy) else None
         message = tuple(self.policy.communicate(observation))
+        self._record_memory(observation, before, "message")
         self.callbacks.append(dict(agent=self.index, phase="communication", message=message))
         return message
 
     def complete_encounter(self, experience):
         complete = getattr(self.policy, "complete_encounter", None)
         if complete is not None:
+            before = self.policy.state if isinstance(self.policy, AgentPolicy) else None
             complete(experience)
+            self._record_memory(experience.observation, before, "completion")
 
     def act(self, observation):
+        before = self.policy.state if isinstance(self.policy, AgentPolicy) else None
         action = self.policy.act(observation)
+        self._record_memory(observation, before, "action")
         self.callbacks.append(dict(
             agent=self.index, phase="action", choice=action.value,
             observation=dict(partner_appearance=observation.partner_appearance.tolist())))
@@ -157,6 +172,7 @@ def evaluate_policy(config: ExperimentConfig,
                    point_generation_probability=world.state.point_generation_probability.tolist())
     relationships = RelationshipAnalysis(initial, history_by_partner=True)
     messages = []
+    memory_history = []
     returns = [0.0] * config.num_agents
     death_steps = [None] * config.num_agents
     for step in range(budget):
@@ -165,8 +181,10 @@ def evaluate_policy(config: ExperimentConfig,
                 policy.state = PolicyState(torch.zeros_like(policy.state.memory),
                                            policy.state.affect, policy.state.entities)
         callbacks = []
-        result = protocol.step([_EvaluationRecorder(policy, i, callbacks)
+        memory_events = []
+        result = protocol.step([_EvaluationRecorder(policy, i, callbacks, memory_events)
                                 for i, policy in enumerate(policies)])
+        memory_history.extend(dict(step=step, **event) for event in memory_events)
         relationships.record_step(dict(
             step=step, participants=[c['agent'] for c in callbacks if c['phase'] == 'action'],
             callbacks=callbacks,
@@ -199,6 +217,7 @@ def evaluate_policy(config: ExperimentConfig,
         final_life=world.state.life.tolist(), final_points=world.state.points.tolist(),
         **action_metrics(rows), relationship_actions=rows, history_key="actual_partner",
         relationship_metrics=relationship_metrics(rows),
+        entity_memory_events=memory_history,
         communication_messages=messages,
         communication=communication_metrics([row['message'] for row in messages],
                                             config.vocabulary_size))

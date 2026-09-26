@@ -260,14 +260,15 @@ class ComparisonTests(unittest.TestCase):
     def test_training_and_comparison_cli_use_identical_reproducible_updates(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
-            for method in ('actor_critic', 'reinforce'):
+            for method, dimension in (('actor_critic', 5), ('reinforce', 0)):
                 with self.subTest(method=method):
                     config = path / f'{method}.toml'
-                    config.write_text(f'training_method = "{method}"\n')
+                    config.write_text(f'training_method = "{method}"\nentity_memory_dim = 9\n')
                     command = [sys.executable, '-m', 'self_genesis']
                     settings = ['--config', str(config), '--device', 'cpu', '--seed', '17',
                                 '--num-agents', '3', '--initial-life', '3', '--initial-points', '1',
                                 '--episodes', '2', '--survival-horizon', '2',
+                                '--entity-memory-dim', str(dimension),
                                 '--value-loss-coefficient', '0.7',
                                 '--action-entropy-coefficient', '0.2',
                                 '--message-entropy-coefficient', '0.3']
@@ -284,6 +285,14 @@ class ComparisonTests(unittest.TestCase):
                         reports.append(json.loads(output.read_text()))
                     self.assertEqual(*reports)
                     self.assertEqual(reports[0]['config']['training_method'], method)
+                    self.assertEqual(reports[0]['config']['entity_memory_dim'], dimension)
+                    for evaluation in reports[0]['evaluations']:
+                        events = evaluation['entity_memory_events']
+                        if evaluation['policy'] == 'learned':
+                            self.assertEqual(len(events), 12)
+                            self.assertTrue(all(len(e['retrieved']) == dimension for e in events))
+                        else:
+                            self.assertEqual(events, [])
                     for update, recorded in zip(reports[0]['training'], updates, strict=True):
                         self.assertEqual(update, {key: recorded[key] for key in update})
                         self.assertEqual(update['training_method'], method)

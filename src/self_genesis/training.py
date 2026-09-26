@@ -79,7 +79,10 @@ def run_training(config: ExperimentConfig, output: Path) -> dict:
         memory_dim=config.memory_dim, affect_dim=config.affect_dim).to(device)
     optimizer = torch.optim.Adam(network.parameters(), lr=config.learning_rate)
     with RunRecorder(output) as recorder:
-        collector = RolloutCollector(config, network, recorder=recorder)
+        collector = RolloutCollector(config, network)
+        # train_episode resets before collecting; do not record the unused
+        # construction-time episode as part of this training run.
+        collector.recorder = recorder
         total_steps = 0
         for _ in range(config.episodes):
             result = train_episode(collector, optimizer)

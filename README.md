@@ -331,6 +331,8 @@ training need not match.
 directory. Existing results are never overwritten. Stdout reports JSON with the
 absolute results path, effective settings, resolved device, completed episode
 count, total steps, and last update. The JSONL file contains all episode settings,
-observations, summaries, and learning metrics described above; read it with
+observations, summaries, and learning metrics described above. Training attaches
+the recorder after collector construction, so only the requested episodes are
+recorded, numbered from zero, each with a summary and training result. Read it with
 `json.loads(line)` for each line. It is observation data, not a model checkpoint.
 If interrupted, flushed records remain accessible but the run may be incomplete.

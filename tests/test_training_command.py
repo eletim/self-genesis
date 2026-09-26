@@ -54,6 +54,12 @@ class TrainingCommandTests(unittest.TestCase):
                 records = [json.loads(line) for line in output.read_text().splitlines()]
                 outputs.append(records)
                 starts = [r for r in records if r['type'] == 'episode_start']
+                self.assertEqual(len(starts), summary['episodes'])
+                self.assertEqual([r['episode'] for r in starts], [0, 1])
+                for kind in ('summary', 'training'):
+                    self.assertEqual(
+                        [r['episode'] for r in records if r['type'] == kind],
+                        [r['episode'] for r in starts])
                 self.assertEqual(starts[0]['settings']['seed'], 42)
                 self.assertEqual(starts[0]['policy_settings'], {
                     'appearance_dim': 2, 'vocabulary_size': 5,

@@ -6,6 +6,8 @@
 
 [Bounded v0.0.4 renewable comparison and observed behavior](docs/renewable-experiment.md)
 
+[Matched multi-seed Actor-Critic versus REINFORCE evidence](docs/matched-learning-experiment.md)
+
 ## Experiment foundation
 
 Requires Python 3.11+ and PyTorch. Create a virtual environment and install:

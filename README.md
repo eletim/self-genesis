@@ -252,3 +252,51 @@ are rejected by the loss. This minimal update uses full episode graphs and has
 no value baseline or truncation bootstrap. CPU tests verify finite losses,
 per-agent credit, nonzero gradients and parameter updates, including memory and
 affect feedback; they do not establish learned cooperation or communication.
+
+## Persisted experiment observations
+
+```python
+from self_genesis.observation import RunRecorder
+
+# Use a fresh path; existing files are never overwritten.
+with RunRecorder("run.jsonl") as recorder:
+    collector = RolloutCollector(config, network, recorder=recorder)
+    optimizer = torch.optim.Adam(network.parameters(), lr=0.001)
+    result = train_episode(collector, optimizer)
+```
+
+The optional recorder writes versioned JSON Lines and flushes each record. It
+also works with `collector.collect(max_steps=...)` for bounded inference or
+collection. Each reset starts a numbered episode; construction records episode
+zero, so `train_episode`'s explicit reset starts episode one. The file is the run
+identifier. Use one recorder per collector and close it with the context manager.
+Records contain ordinary numbers and lists, without retaining autograd graphs.
+
+- `episode_start`: effective world settings (including seed), resolved device,
+  policy/channel dimensions, initial Appearance, Life, Points, Working Memory,
+  and affect latents. Seed covers collection; callers still control initial
+  network weights and must seed before network construction for repeatability.
+- `step`: zero-based episode step, ordered encounter participants, both messages
+  followed by both actions, each callback's observation, sampled choice, log
+  probability, and memory/affect before and after. Rewards and new deaths cover
+  every agent. Life/Point arrays are post-step population distributions in agent
+  order; state arrays are captured before death clears the live adapter. No
+  encounter produces empty participant and callback lists.
+- `summary`: cumulative episode deaths, observed lifetimes, zero-based death
+  steps, token counts by token number, and sampled GIVE/NOTHING counts and
+  fractions. The denominator is encounter action callbacks, excluding automatic
+  NOTHING for unselected agents. GIVE counts include attempts with no Points;
+  resource changes show realized effects. Fractions are null with no callbacks.
+  Collection budget and termination/truncation flags describe this segment.
+- `training`: the survival policy loss used for the completed update, per-agent
+  survival returns, optimizer class, and parameter-group settings.
+
+A surviving lifetime is explicitly right-censored at each collection boundary.
+`mean_survival_time` is null until extinction; `mean_completed_lifetime` averages
+only deaths (null when none), and `mean_observed_lifetime` includes the observed
+ages of survivors. Continued segments update cumulative summaries; do not sum
+summaries across segments. Raw step rewards permit independent reconstruction.
+A reset or closing the file does not turn unfinished lifetimes into deaths.
+Agent and episode numbers are logging keys only and never enter policy inputs.
+The CLI continues to provide the initialization smoke experiment; recording is
+available through the rollout/training Python API.

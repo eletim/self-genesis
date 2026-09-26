@@ -55,6 +55,10 @@ def train_episode(collector: RolloutCollector,
     loss.backward()
     collector.detach()
     optimizer.step()
-    return TrainingResult(
+    result = TrainingResult(
         loss.item(), rollout.steps,
         tuple(sum(item.reward for item in items) for items in rollout.experiences))
+
+    if collector.recorder is not None:
+        collector.recorder.record_training(result, optimizer)
+    return result

@@ -6,6 +6,7 @@ import torch
 
 from self_genesis.config import ExperimentConfig
 from self_genesis.encounter import EncounterProtocol, Observation
+from self_genesis.observation import RunRecorder
 from self_genesis.policy import AgentPolicy, PolicyState, RecurrentPolicy
 from self_genesis.world import Action, World
 
@@ -70,9 +71,11 @@ class RolloutCollector:
     Returned records own their decision references and survive reset/detach.
     """
 
-    def __init__(self, config: ExperimentConfig, network: RecurrentPolicy):
+    def __init__(self, config: ExperimentConfig, network: RecurrentPolicy, *,
+                 recorder: RunRecorder | None = None):
         if network.appearance_dim != config.appearance_dim:
             raise ValueError("Policy and world appearance dimensions must match")
+        self.recorder = recorder
         self.config = config
         self.network = network
         self.agents = tuple(AgentPolicy(network) for _ in range(config.num_agents))
@@ -88,6 +91,8 @@ class RolloutCollector:
         self.elapsed_steps = 0
         for agent in self.agents:
             agent.reset()
+        if self.recorder is not None:
+            self.recorder.start_episode(self)
 
     def detach(self) -> None:
         """Keep recurrent values but cut history before the next training segment."""
@@ -103,6 +108,8 @@ class RolloutCollector:
             alive = self.world.alive.tolist()
             policies = [_RecordingPolicy(agent) for agent in self.agents]
             result = self.protocol.step(policies)
+            if self.recorder is not None:
+                self.recorder.record_step(self, result, policies)
             for index, (agent, policy) in enumerate(zip(self.agents, policies)):
                 if alive[index]:
                     experiences[index].append(AgentExperience(
@@ -116,5 +123,8 @@ class RolloutCollector:
             self.elapsed_steps += 1
             steps += 1
         terminated = not bool(self.world.alive.any())
+        if self.recorder is not None:
+            self.recorder.record_summary(
+                self, max_steps=max_steps, steps=steps, terminated=terminated)
         return Rollout(tuple(tuple(items) for items in experiences), steps,
                        terminated, not terminated)

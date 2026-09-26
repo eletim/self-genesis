@@ -8,6 +8,22 @@
 
 [Validated v0.0.5 matched Actor-Critic versus REINFORCE evidence](docs/matched-learning-experiment.md)
 
+[Validated v0.0.6 Entity Memory comparison and reproduction](docs/entity-memory-experiment.md)
+
+## v0.0.6 Entity Memory evidence
+
+The current default adds 16-dimensional Entity Memory keyed by perceived
+Appearance; `--entity-memory-dim 0` retains the v0.0.5 architecture. The
+[matched CPU experiment](docs/entity-memory-experiment.md) trained each condition
+for 100 updates with three training seeds and three held-out seeds. Mean lifetime
+was 12.4722 steps enabled versus 12.3611 disabled, with paired seed differences
+of -0.0833, +2.3333, and -1.9167. Neither beat always-GIVE (14.4167).
+Entity Memory reset and both Appearance interventions left survival and GIVE
+counts unchanged. These mixed and null findings do not establish improved
+cooperation, survival, useful memory, or producer identification. Both full runs
+replayed exactly; disabled-memory updates and shared evaluation outcomes match
+the actual v0.0.5 implementation. The older results below are historical.
+
 ## v0.0.5 learning and evidence
 
 v0.0.5 defaults to Actor-Critic with a scalar value baseline, detached advantages,
@@ -431,7 +447,7 @@ keep resource budgets small for exploratory runs.
 
 All flat TOML settings can also be overridden with hyphenated CLI flags:
 `--num-agents`, `--appearance-dim`, `--initial-life`, `--initial-points`,
-`--vocabulary-size`, `--max-message-length`, `--memory-dim`, `--affect-dim`,
+`--vocabulary-size`, `--max-message-length`, `--memory-dim`, `--affect-dim`, `--entity-memory-dim`,
 `--episodes`, `--learning-rate`, `--seed`, `--device`, `--survival-horizon`,
 `--point-generation-probability-min`, `--point-generation-probability-max`,
 `--training-method`, `--value-loss-coefficient`, `--action-entropy-coefficient`,
@@ -561,8 +577,10 @@ done
 ```
 
 This two-update smoke run is not the recorded 100-update experiment. Use the
-[full reproduction procedure and retained reports](docs/matched-learning-experiment.md#reproduction-and-retained-evidence)
-for the validated findings. Keep all conditions except `--training-method` matched;
+[Entity Memory reproduction procedure and retained report](docs/entity-memory-experiment.md)
+for the current validated findings. The historical
+[learning-method comparison](docs/matched-learning-experiment.md#reproduction-and-retained-evidence)
+requires its recorded checkout. Keep all conditions except `--training-method` matched;
 REINFORCE ignores the value/entropy coefficients.
 
 `--training-seeds` defaults to the configured seed. Each seed initializes and trains

@@ -1,4 +1,4 @@
-# Bounded matched learning comparison
+# Validated v0.0.5 matched learning comparison
 
 Recorded 2026-09-26 using implementation commit
 `8487da27cad2010c4eef6787d7bb32cce584c305` on `dev/v0.0.5`.
@@ -9,7 +9,7 @@ validation, with no requirement for improved survival or reduced collapse.
 ## Conditions and bounds
 
 The experiment reuses `compare` without changing training, evaluation, world
-rules, or metrics. Both methods use the v0.0.4 `configs/default.toml` environment:
+rules, or metrics. Both methods retain the v0.0.4 environment via `configs/default.toml`:
 four agents, Life 10, Points 3, independent fixed generation abilities uniform
 in [0.1, 0.3], Appearance dimension 8, vocabulary 4, message length 3, memory
 16, affect 4, and survival horizon 100. Adam uses learning rate 0.001.
@@ -72,7 +72,9 @@ mkdir /tmp/matched-learning-reproduction
 for repeat in 1 2; do
   for method in actor_critic reinforce; do
     python -m self_genesis compare --config configs/default.toml --device cpu \
-      --training-method "$method" --episodes 100 --survival-horizon 100 \
+      --training-method "$method" --value-loss-coefficient 0.5 \
+      --action-entropy-coefficient 0.01 --message-entropy-coefficient 0.01 \
+      --episodes 100 --survival-horizon 100 \
       --training-seeds 41 42 43 --evaluation-seeds 101 102 103 \
       --interventions appearance-shuffle working-memory-reset \
       --output "/tmp/matched-learning-reproduction/$method-$repeat.json"

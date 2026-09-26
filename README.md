@@ -4,9 +4,33 @@
 
 [Runnable CPU and RTX 5090 experiments, analysis, and validation](docs/minimal-experiment.md)
 
-[Bounded v0.0.4 renewable comparison and observed behavior](docs/renewable-experiment.md)
+[Historical v0.0.4 renewable comparison and observed behavior](docs/renewable-experiment.md)
 
-[Matched multi-seed Actor-Critic versus REINFORCE evidence](docs/matched-learning-experiment.md)
+[Validated v0.0.5 matched Actor-Critic versus REINFORCE evidence](docs/matched-learning-experiment.md)
+
+## v0.0.5 learning and evidence
+
+v0.0.5 defaults to Actor-Critic with a scalar value baseline, detached advantages,
+and separate action/message entropy controls; `--training-method reinforce`
+selects the legacy objective in the current implementation. The v0.0.4 renewable
+world, encounter order, fixed Appearance, observations, and recurrent dimensions
+remain unchanged. Generation abilities and identity labels stay out of learned
+policy inputs. As required by the [design principles](docs/design-principles.md),
+reward remains each agent's own survival only: entropy regularizes the loss,
+with no GIVE, cooperation, or communication bonuses. Finite-horizon survivors
+remain censored, with no bootstrap or terminal bonus.
+
+The [validated matched experiment](docs/matched-learning-experiment.md) used
+three training seeds, three held-out seeds, and 100 updates per training seed.
+Mean held-out lifetime averaged over training seeds was 12.3611 steps for
+Actor-Critic versus 13.3333 for REINFORCE; neither beat always-GIVE (14.4167).
+All learned seed-level GIVE summaries were mixed. Appearance shuffle and Working
+Memory reset left Actor-Critic survival and GIVE counts unchanged in this sample;
+that does not prove these inputs/states are unused. History associations and token
+usage establish neither causal reciprocity nor useful communication. These bounded
+CPU results do not establish improved survival, reduced collapse, or convergence.
+The separate [v0.0.4 record](docs/renewable-experiment.md) is historical evidence,
+including a zero-generation control that was not rerun for v0.0.5.
 
 ## Experiment foundation
 
@@ -370,7 +394,9 @@ All flat TOML settings can also be overridden with hyphenated CLI flags:
 `--num-agents`, `--appearance-dim`, `--initial-life`, `--initial-points`,
 `--vocabulary-size`, `--max-message-length`, `--memory-dim`, `--affect-dim`,
 `--episodes`, `--learning-rate`, `--seed`, `--device`, `--survival-horizon`,
-`--point-generation-probability-min`, and `--point-generation-probability-max`.
+`--point-generation-probability-min`, `--point-generation-probability-max`,
+`--training-method`, `--value-loss-coefficient`, `--action-entropy-coefficient`,
+and `--message-entropy-coefficient`.
 Vocabulary, memory, affect dimensions, and episode count must be positive
 integers. Message length must be a nonnegative integer; zero disables messages.
 Learning rate must be finite and positive. The runnable renewable settings are
@@ -478,14 +504,24 @@ files are never overwritten. The comparison JSON is separate from training JSONL
 and does not go through `examples/analyze_run.py`.
 
 
-To compare independent training seeds and both evaluation interventions:
+For a small comparison of both learning methods, independent training seeds, and
+both evaluation interventions (use fresh output filenames):
 
 ```sh
-python -m self_genesis compare --config configs/renewable.toml --device cpu \
-  --episodes 2 --survival-horizon 100 --training-seeds 41 42 43 \
-  --evaluation-seeds 101 102 --interventions appearance-shuffle working-memory-reset \
-  --output intervention-comparison.json
+for method in actor_critic reinforce; do
+  python -m self_genesis compare --config configs/renewable.toml --device cpu \
+    --training-method "$method" --value-loss-coefficient 0.5 \
+    --action-entropy-coefficient 0.01 --message-entropy-coefficient 0.01 \
+    --episodes 2 --survival-horizon 100 --training-seeds 41 42 43 \
+    --evaluation-seeds 101 102 --interventions appearance-shuffle working-memory-reset \
+    --output "$method-comparison.json"
+done
 ```
+
+This two-update smoke run is not the recorded 100-update experiment. Use the
+[full reproduction procedure and retained reports](docs/matched-learning-experiment.md#reproduction-and-retained-evidence)
+for the validated findings. Keep all conditions except `--training-method` matched;
+REINFORCE ignores the value/entropy coefficients.
 
 `--training-seeds` defaults to the configured seed. Each seed initializes and trains
 its own network with the same training budget. Evaluation seeds default to the

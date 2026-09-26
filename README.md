@@ -282,19 +282,26 @@ Records contain ordinary numbers and lists, without retaining autograd graphs.
 
 - `episode_start`: effective world settings (including seed), resolved device,
   policy/channel dimensions, initial Appearance, Life, Points, Working Memory,
-  and affect latents. Seed covers collection; callers still control initial
+  and affect latents, plus each agent's fixed `point_generation_probability`.
+  Seed covers collection; callers still control initial
   network weights and must seed before network construction for repeatability.
 - `step`: zero-based episode step, ordered encounter participants, both messages
   followed by both actions, each callback's observation, sampled choice, log
   probability, and memory/affect before and after. Rewards and new deaths cover
   every agent. Life/Point arrays are post-step population distributions in agent
   order; state arrays are captured before death clears the live adapter. No
-  encounter produces empty participant and callback lists.
+  encounter produces empty participant and callback lists. `generated_points`
+  records actual post-decay generation for every agent, including nonparticipants.
+  `successful_transfers` lists directed `{donor, recipient}` events: each spends
+  one donor Point and restores one recipient Life before decay. Empty lists mean
+  no successful transfers. Together with initial resources, these fields permit
+  per-agent reconstruction of Life and Points at every step.
 - `summary`: cumulative episode deaths, observed lifetimes, zero-based death
   steps, token counts by token number, and sampled GIVE/NOTHING counts and
   fractions. The denominator is encounter action callbacks, excluding automatic
   NOTHING for unselected agents. GIVE counts include attempts with no Points;
-  resource changes show realized effects. Fractions are null with no callbacks.
+  successful transfer events distinguish realized effects from those attempts.
+  Fractions are null with no callbacks.
   Collection budget and termination/truncation flags describe this segment.
 - `training`: the survival policy loss used for the completed update, per-agent
   survival returns, optimizer class, and parameter-group settings.
@@ -305,7 +312,11 @@ only deaths (null when none), and `mean_observed_lifetime` includes the observed
 ages of survivors. Continued segments update cumulative summaries; do not sum
 summaries across segments. Raw step rewards permit independent reconstruction.
 A reset or closing the file does not turn unfinished lifetimes into deaths.
+Survivors at a completed survival horizon remain censored; horizon completion
+does not imply extinction or make `mean_survival_time` available.
 Agent and episode numbers are logging keys only and never enter policy inputs.
+Generation abilities, generation outcomes, and transfer events are analysis-only
+fields and are not added to policy observations.
 The `train` command also records these observations automatically.
 
 ## Configurable training command

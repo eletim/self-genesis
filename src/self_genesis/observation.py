@@ -69,6 +69,8 @@ class RunRecorder:
                 "memory_dim", "affect_dim")},
             **_resources(collector.world),
             appearance=collector.world.state.appearance.tolist(),
+            point_generation_probability=(
+                collector.world.state.point_generation_probability.tolist()),
             states=[_state(agent.state) for agent in collector.agents])
 
     def record_step(self, collector, result, policies):
@@ -110,6 +112,9 @@ class RunRecorder:
         self._write(
             "step", step=collector.elapsed_steps, participants=participants,
             callbacks=callbacks, rewards=result.reward.tolist(), died=result.died.tolist(),
+            generated_points=result.generated_points.tolist(),
+            successful_transfers=[{"donor": donor, "recipient": recipient}
+                                  for donor, recipient in result.successful_transfers],
             **_resources(collector.world),
             states=[_state(agent.state) for agent in collector.agents])
 

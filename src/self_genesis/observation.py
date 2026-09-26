@@ -66,7 +66,7 @@ class RunRecorder:
             resolved_device=str(collector.world.state.life.device),
             policy_settings={name: getattr(network, name) for name in (
                 "appearance_dim", "vocabulary_size", "max_message_length",
-                "memory_dim", "affect_dim")},
+                "memory_dim", "affect_dim", "entity_memory_dim")},
             **_resources(collector.world),
             appearance=collector.world.state.appearance.tolist(),
             point_generation_probability=(

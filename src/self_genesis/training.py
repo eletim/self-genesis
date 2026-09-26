@@ -155,7 +155,8 @@ def run_training(config: ExperimentConfig, output: Path) -> dict:
     network = RecurrentPolicy(
         config.appearance_dim, vocabulary_size=config.vocabulary_size,
         max_message_length=config.max_message_length,
-        memory_dim=config.memory_dim, affect_dim=config.affect_dim).to(device)
+        memory_dim=config.memory_dim, affect_dim=config.affect_dim,
+        entity_memory_dim=config.entity_memory_dim).to(device)
     optimizer = torch.optim.Adam(network.parameters(), lr=config.learning_rate)
     with RunRecorder(output) as recorder:
         collector = RolloutCollector(config, network)

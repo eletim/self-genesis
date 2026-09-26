@@ -163,17 +163,33 @@ result = protocol.step(agents)
 ```
 
 Use a distinct `AgentPolicy` for each agent. Adapters may share a network, but
-own separate Working Memory, affect tensors, and sampled-decision log
+own separate Working Memory, affect tensors, Entity Memory, and sampled-decision log
 probabilities. The network itself holds only weights. Its `forward` method
 also accepts and returns explicit `PolicyState` tensors for inspection.
 
 Each communication or action callback encodes resources, partner Appearance,
 role, received message positions, available partner action, and callback phase.
-A thought layer consumes this observation plus previous memory and affect;
+A thought layer consumes this observation plus previous memory, affect, and
+the retrieved Entity Memory value;
 a GRU updates memory using thought and previous affect. New affect is generated
 from the observation, thought, and updated memory, then feeds the next callback.
 Affect dimensions have no predefined meanings or supervised targets. No agent
 indices, self labels, or auxiliary classification objectives are added.
+
+Entity Memory stores one unlabeled latent value per distinct observed Appearance,
+using exact tensor equality for retrieval. An unseen Appearance retrieves zeros;
+identical Appearances share an entry, without hidden IDs. After each callback, a
+learned GRU updates that entry from the observation, thought, updated Working
+Memory, and affect. Retrieval feeds thought and thus both action and Communication
+heads and the critic. Values have no assigned meanings or auxiliary targets.
+Entries persist across encounters, reset at episode boundaries, and detach with
+other recurrent state between training segments. Storage grows with the distinct
+Appearances observed during an episode; there is no eviction or approximate match.
+
+`entity_memory_dim` defaults to 16 in the network and experiment configuration.
+Set it to `0` in TOML or pass `--entity-memory-dim 0` to disable Entity Memory and
+recover the v0.0.5 layer shapes, initialization, and forward computation. The
+existing `working-memory-reset` intervention resets only Working Memory.
 
 The communication head samples independent tokens from one categorical
 distribution for a fixed-length message; the action head samples GIVE or

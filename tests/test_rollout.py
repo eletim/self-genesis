@@ -126,6 +126,7 @@ class RolloutTests(unittest.TestCase):
             state = first.experiences[0][0].decisions[0].state_after
             state.memory.retain_grad()
             state.affect.retain_grad()
+            state.entities[0].value.retain_grad()
             later = collector.collect(1)
             collector.detach()
             collector.reset()
@@ -136,16 +137,18 @@ class RolloutTests(unittest.TestCase):
                     else -torch.stack(terms).sum())
             loss.backward()
             for name, parameter in collector.network.named_parameters():
-                if name.startswith((*heads, "thought", "memory_update", "affect_update")):
+                if name.startswith((*heads, "thought", "memory_update", "affect_update",
+                                    "entity_update")):
                     self.assertIsNotNone(parameter.grad, name)
                     self.assertTrue(torch.isfinite(parameter.grad).all(), name)
                     self.assertGreater(parameter.grad.abs().sum().item(), 0, name)
                 else:
                     self.assertIsNone(parameter.grad, name)
-            for tensor in (state.memory, state.affect):
+            for tensor in (state.memory, state.affect, state.entities[0].value):
                 self.assertTrue(torch.isfinite(tensor.grad).all())
                 self.assertGreater(tensor.grad.abs().sum().item(), 0)
             for agent in collector.agents:
+                self.assertEqual(agent.state.entities, ())
                 self.assertEqual(agent.values, [])
                 self.assertEqual(agent.entropies, [])
 

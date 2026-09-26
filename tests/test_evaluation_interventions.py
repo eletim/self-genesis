@@ -75,6 +75,7 @@ class InterventionTests(unittest.TestCase):
 
         handle = network.register_forward_pre_hook(inspect, with_kwargs=True)
         previous_affects = []
+        previous_entities = []
         original_step = EncounterProtocol.step
 
         def checked_step(protocol, policies):
@@ -83,8 +84,11 @@ class InterventionTests(unittest.TestCase):
                 self.assertEqual(torch.count_nonzero(state.memory), 0)
                 if previous_affects:
                     self.assertTrue(torch.equal(state.affect, previous_affects[index]))
+                    self.assertIs(state.entities, previous_entities[index])
+                    self.assertEqual(len(state.entities), 1)
             result = original_step(protocol, policies)
             previous_affects[:] = [wrapper.policy.state.affect.clone() for wrapper in policies]
+            previous_entities[:] = [wrapper.policy.state.entities for wrapper in policies]
             return result
 
         with patch.object(EncounterProtocol, 'step', autospec=True, side_effect=checked_step):

@@ -22,7 +22,7 @@ class PolicyTests(unittest.TestCase):
         state.affect.retain_grad()
         subsequent, next_state = self.network(self.observation, state, communicating=False)
         changed, changed_state = self.network(
-            self.observation, PolicyState(state.memory, state.affect + 1),
+            self.observation, PolicyState(state.memory, state.affect + 1, state.entities),
             communicating=False)
         self.assertFalse(torch.allclose(subsequent, changed))
         self.assertFalse(torch.allclose(next_state.memory, changed_state.memory))

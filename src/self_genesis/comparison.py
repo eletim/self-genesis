@@ -157,7 +157,8 @@ def evaluate_policy(config: ExperimentConfig,
     for step in range(budget):
         if intervention == 'working-memory-reset':
             for policy in policies:
-                policy.state = PolicyState(torch.zeros_like(policy.state.memory), policy.state.affect)
+                policy.state = PolicyState(torch.zeros_like(policy.state.memory),
+                                           policy.state.affect, policy.state.entities)
         callbacks = []
         result = protocol.step([_EvaluationRecorder(policy, i, callbacks)
                                 for i, policy in enumerate(policies)])
@@ -223,7 +224,8 @@ def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=N
             network = RecurrentPolicy(
                 config.appearance_dim, vocabulary_size=config.vocabulary_size,
                 max_message_length=config.max_message_length,
-                memory_dim=config.memory_dim, affect_dim=config.affect_dim).to(device)
+                memory_dim=config.memory_dim, affect_dim=config.affect_dim,
+                entity_memory_dim=config.entity_memory_dim).to(device)
             collector = RolloutCollector(training_config, network)
             optimizer = torch.optim.Adam(network.parameters(), lr=config.learning_rate)
             updates = [asdict(train_episode(collector, optimizer)) for _ in range(config.episodes)]

@@ -20,6 +20,7 @@ class ExperimentConfig:
     max_message_length: int = 3
     memory_dim: int = 16
     affect_dim: int = 4
+    entity_memory_dim: int = 16
     survival_horizon: int | None = None
     episodes: int = 3
     learning_rate: float = 0.001
@@ -36,6 +37,7 @@ class ExperimentConfig:
             ("initial_life", 1), ("initial_points", 0),
             ("vocabulary_size", 1), ("max_message_length", 0),
             ("memory_dim", 1), ("affect_dim", 1), ("episodes", 1),
+            ("entity_memory_dim", 0),
         ):
             value = getattr(self, name)
             if type(value) is not int or value < minimum:

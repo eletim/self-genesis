@@ -112,6 +112,11 @@ class _EvaluationRecorder:
         self.callbacks.append(dict(agent=self.index, phase="communication", message=message))
         return message
 
+    def complete_encounter(self, experience):
+        complete = getattr(self.policy, "complete_encounter", None)
+        if complete is not None:
+            complete(experience)
+
     def act(self, observation):
         action = self.policy.act(observation)
         self.callbacks.append(dict(

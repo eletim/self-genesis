@@ -181,10 +181,19 @@ using exact tensor equality for retrieval. An unseen Appearance retrieves zeros;
 identical Appearances share an entry, without hidden IDs. After each callback, a
 learned GRU updates that entry from the observation, thought, updated Working
 Memory, and affect. Retrieval feeds thought and thus both action and Communication
-heads and the critic. Values have no assigned meanings or auxiliary targets.
-Entries persist across encounters, reset at episode boundaries, and detach with
-other recurrent state between training segments. Storage grows with the distinct
-Appearances observed during an episode; there is no eviction or approximate match.
+heads and the critic. After world resolution, an additional learned GRU writes
+completed Encounter experience: the same observed Appearance, pre-step resource
+observation, received message, both chosen actions, and whether each directed
+gift succeeded. Only participants receive this feedback; hidden IDs, generation
+abilities/draws, and analysis histories are excluded. Completion updates only
+Entity Memory, without sampling another decision or adding a loss/reward. The
+same feedback path runs during training and frozen-weight evaluation, including
+Appearance shuffling. Values have no assigned meanings or auxiliary targets.
+Entries persist across encounters and collection boundaries, reset on death and
+at episode boundaries, and detach with other recurrent state only when explicitly
+requested (training does so after complete-episode backpropagation). Storage grows
+with the distinct Appearances observed during an episode; there is no eviction or
+approximate match.
 
 `entity_memory_dim` defaults to 16 in the network and experiment configuration.
 Set it to `0` in TOML or pass `--entity-memory-dim 0` to disable Entity Memory and

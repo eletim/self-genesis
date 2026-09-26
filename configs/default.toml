@@ -12,5 +12,6 @@ vocabulary_size = 4
 max_message_length = 3
 memory_dim = 16
 affect_dim = 4
+entity_memory_dim = 16 # Set to 0 for the v0.0.5 architecture.
 episodes = 3
 learning_rate = 0.001

@@ -1,9 +1,14 @@
 """Complete-episode REINFORCE using only each agent's survival rewards."""
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from pathlib import Path
 
 import torch
 
+from self_genesis.config import ExperimentConfig
+from self_genesis.experiment import resolve_device
+from self_genesis.observation import RunRecorder
+from self_genesis.policy import RecurrentPolicy
 from self_genesis.rollout import Rollout, RolloutCollector
 
 
@@ -62,3 +67,26 @@ def train_episode(collector: RolloutCollector,
     if collector.recorder is not None:
         collector.recorder.record_training(result, optimizer)
     return result
+
+
+def run_training(config: ExperimentConfig, output: Path) -> dict:
+    """Run a fixed number of complete updates and persist observations to JSONL."""
+    device = resolve_device(config.device)
+    torch.manual_seed(config.seed)
+    network = RecurrentPolicy(
+        config.appearance_dim, vocabulary_size=config.vocabulary_size,
+        max_message_length=config.max_message_length,
+        memory_dim=config.memory_dim, affect_dim=config.affect_dim).to(device)
+    optimizer = torch.optim.Adam(network.parameters(), lr=config.learning_rate)
+    with RunRecorder(output) as recorder:
+        collector = RolloutCollector(config, network)
+        # train_episode resets before collecting; do not record the unused
+        # construction-time episode as part of this training run.
+        collector.recorder = recorder
+        total_steps = 0
+        for _ in range(config.episodes):
+            result = train_episode(collector, optimizer)
+            total_steps += result.steps
+    return {"config": asdict(config), "resolved_device": str(device),
+            "output": str(Path(output).resolve()), "episodes": config.episodes,
+            "total_steps": total_steps, "last_training": asdict(result)}

@@ -34,7 +34,7 @@ same software version. This does not promise deterministic future training or
 identical results across PyTorch versions.
 
 Each run prints JSON containing the effective conditions, resolved device, and
-initial agent state. The CLI remains an initialization smoke experiment.
+initial agent state. Use the `train` command below to run learning experiments.
 Shared world dynamics and encounters are available through the Python API below.
 A trainable recurrent policy is available through the Python API below.
 
@@ -154,7 +154,7 @@ one per action) for policy-gradient training with each agent's survival
 reward-to-go. Discrete samples themselves are not differentiable. The tests
 exercise a complete episode and optimizer update using only world survival
 rewards; this is a trainability check, not evidence of learned cooperation.
-The CLI remains an initialization smoke experiment, not a training runner.
+The `train` command below exposes these updates through the CLI.
 
 Call `agent.reset()` at episode boundaries to clear state and experience. For
 truncated backpropagation, consume the pending loss before calling
@@ -209,8 +209,7 @@ Consume the pending loss before `collector.detach()` and an optimizer update.
 Detach preserves recurrent values while cutting history for subsequent segments;
 reset starts fresh instead. Returned records retain their graphs until released,
 so discard consumed segments to free memory. Collection never silently detaches
-at a budget boundary. Use `torch.no_grad()` for inference. The CLI remains an
-initialization smoke experiment.
+at a budget boundary. Use `torch.no_grad()` for inference. The `train` command below runs complete learning episodes.
 
 ## Survival policy training
 
@@ -298,5 +297,42 @@ ages of survivors. Continued segments update cumulative summaries; do not sum
 summaries across segments. Raw step rewards permit independent reconstruction.
 A reset or closing the file does not turn unfinished lifetimes into deaths.
 Agent and episode numbers are logging keys only and never enter policy inputs.
-The CLI continues to provide the initialization smoke experiment; recording is
-available through the rollout/training Python API.
+The `train` command also records these observations automatically.
+
+## Configurable training command
+
+```sh
+python -m self_genesis train --config configs/default.toml --device cpu \
+  --seed 42 --episodes 2 --learning-rate 0.001 --output run.jsonl
+```
+
+The default command (or explicit `init`) still prints initialization JSON.
+`train` builds one shared recurrent network and Adam optimizer and performs
+exactly `episodes` complete survival-policy updates. Each episode is bounded by
+`initial_life + num_agents * initial_points` world steps, so there is no
+truncation bootstrap or open-ended loop. Full episode graphs are held in memory;
+keep resource budgets small for exploratory runs.
+
+All flat TOML settings can also be overridden with hyphenated CLI flags:
+`--num-agents`, `--appearance-dim`, `--initial-life`, `--initial-points`,
+`--vocabulary-size`, `--max-message-length`, `--memory-dim`, `--affect-dim`,
+`--episodes`, `--learning-rate`, `--seed`, and `--device`.
+Vocabulary, memory, affect dimensions, and episode count must be positive
+integers. Message length must be a nonnegative integer; zero disables messages.
+Learning rate must be finite and positive. Defaults are listed in the sample
+configuration. The objective remains undiscounted per-agent survival return.
+
+Training seeds network initialization before moving weights to CPU/CUDA and reuses the
+existing seeded episode reset behavior. Repeat runs on the same device and
+software are reproducible subject to PyTorch backend determinism; CPU and CUDA
+training need not match.
+
+`--output` is required for training and must name a new file in an existing
+directory. Existing results are never overwritten. Stdout reports JSON with the
+absolute results path, effective settings, resolved device, completed episode
+count, total steps, and last update. The JSONL file contains all episode settings,
+observations, summaries, and learning metrics described above. Training attaches
+the recorder after collector construction, so only the requested episodes are
+recorded, numbered from zero, each with a summary and training result. Read it with
+`json.loads(line)` for each line. It is observation data, not a model checkpoint.
+If interrupted, flushed records remain accessible but the run may be incomplete.

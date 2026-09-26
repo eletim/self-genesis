@@ -7,11 +7,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import torch
 
 from self_genesis.comparison import evaluate_policy, run_comparison
 from self_genesis.config import ExperimentConfig
+from self_genesis.encounter import EncounterProtocol
 from self_genesis.policy import RecurrentPolicy
 from self_genesis.world import Action
 
@@ -76,6 +78,41 @@ class ComparisonTests(unittest.TestCase):
             for row in rows:
                 self.assertEqual(row['resolved_device'], 'cuda:0')
                 self.assertEqual(row['survival_returns'], [2, 2])
+
+    def test_evaluation_releases_decision_statistics_each_step(self):
+        for device in (["cpu", "cuda"] if torch.cuda.is_available() else ["cpu"]):
+            for length in (0, 3):
+                with self.subTest(device=device, message_length=length):
+                    config = ExperimentConfig(
+                        device=device, num_agents=4, initial_life=10,
+                        survival_horizon=5, max_message_length=length)
+                    network = RecurrentPolicy(
+                        config.appearance_dim, max_message_length=length).to(device)
+                    agents = []
+                    original_step = EncounterProtocol.step
+
+                    def checked_step(protocol, policies):
+                        agents[:] = [wrapper.policy for wrapper in policies]
+                        for agent in agents:
+                            self.assertEqual(agent.log_probs, [])
+                            self.assertEqual(agent.values, [])
+                            self.assertEqual(agent.entropies, [])
+                        result = original_step(protocol, policies)
+                        # Ensure the evaluation really generated statistics.
+                        self.assertEqual(sum(len(a.values) for a in agents),
+                                         2 if length == 0 else 4)
+                        return result
+
+                    with patch.object(EncounterProtocol, "step", autospec=True,
+                                      side_effect=checked_step) as step:
+                        report = evaluate_policy(config, network)
+                    self.assertEqual(step.call_count, 5)
+                    self.assertTrue(report['horizon_completed'])
+                    self.assertEqual(report['deaths'], 0)
+                    for agent in agents:
+                        self.assertEqual(agent.log_probs, [])
+                        self.assertEqual(agent.values, [])
+                        self.assertEqual(agent.entropies, [])
 
     def test_evaluation_restarts_sampling_and_preserves_weights(self):
         config = ExperimentConfig(initial_life=4, survival_horizon=3)

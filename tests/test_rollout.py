@@ -79,6 +79,9 @@ class RolloutTests(unittest.TestCase):
             self.assertEqual(len(action.observation.received_message), 3)
         torch.stack(terms).sum().backward()
         for name, parameter in collector.network.named_parameters():
+            if name.startswith("value_head"):
+                self.assertIsNone(parameter.grad)
+                continue
             self.assertTrue(torch.isfinite(parameter.grad).all(), name)
             self.assertGreater(parameter.grad.abs().sum().item(), 0, name)
         self.assertEqual(collector.elapsed_steps, 0)
@@ -101,8 +104,50 @@ class RolloutTests(unittest.TestCase):
             message, action = items[0].decisions
             self.assertEqual(message.choice, ())
             self.assertIsNone(message.log_prob)
+            self.assertIsNone(message.value)
+            self.assertIsNone(message.entropy)
+            self.assertIsNotNone(action.value.grad_fn)
+            self.assertIsNotNone(action.entropy.grad_fn)
+            self.assertIs(message.state_after, action.state_before)
             self.assertIsNotNone(action.log_prob.grad_fn)
+        terms = [d.value.square() - d.entropy for items in rollout.experiences
+                 for item in items for d in item.decisions if d.log_prob is not None]
+        torch.stack(terms).sum().backward()
+        self.assertIsNone(collector.network.message_head.weight.grad)
+        self.assertIsNotNone(collector.network.value_head.weight.grad)
         collector.collect(1)
+
+    def test_value_and_entropy_gradients_survive_collection_and_reset(self):
+        for statistic, heads in (("value", ("value_head",)),
+                                 ("entropy", ("message_head", "action_head"))):
+            torch.manual_seed(7)
+            collector = self.collector(num_agents=2, initial_life=4, initial_points=0)
+            first = collector.collect(1)
+            state = first.experiences[0][0].decisions[0].state_after
+            state.memory.retain_grad()
+            state.affect.retain_grad()
+            later = collector.collect(1)
+            collector.detach()
+            collector.reset()
+            decisions = [decision for items in later.experiences
+                         for item in items for decision in item.decisions]
+            terms = [getattr(decision, statistic) for decision in decisions]
+            loss = (torch.stack(terms).sub(3).square().sum() if statistic == "value"
+                    else -torch.stack(terms).sum())
+            loss.backward()
+            for name, parameter in collector.network.named_parameters():
+                if name.startswith((*heads, "thought", "memory_update", "affect_update")):
+                    self.assertIsNotNone(parameter.grad, name)
+                    self.assertTrue(torch.isfinite(parameter.grad).all(), name)
+                    self.assertGreater(parameter.grad.abs().sum().item(), 0, name)
+                else:
+                    self.assertIsNone(parameter.grad, name)
+            for tensor in (state.memory, state.affect):
+                self.assertTrue(torch.isfinite(tensor.grad).all())
+                self.assertGreater(tensor.grad.abs().sum().item(), 0)
+            for agent in collector.agents:
+                self.assertEqual(agent.values, [])
+                self.assertEqual(agent.entropies, [])
 
     def test_reset_preserves_rng_streams_and_reproduces_runs(self):
         def run():

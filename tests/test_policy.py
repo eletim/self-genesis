@@ -79,10 +79,16 @@ class PolicyTests(unittest.TestCase):
         optimizer.zero_grad()
         loss.backward()
         for name, parameter in self.network.named_parameters():
+            if name.startswith("value_head"):
+                self.assertIsNone(parameter.grad)
+                continue
             self.assertTrue(torch.isfinite(parameter.grad).all(), name)
             self.assertGreater(parameter.grad.abs().sum().item(), 0, name)
         optimizer.step()
         for name, parameter in self.network.named_parameters():
+            if name.startswith("value_head"):
+                self.assertIsNone(parameter.grad)
+                continue
             self.assertFalse(torch.equal(before[name], parameter), name)
 
     def test_channel_bounds_and_device(self):
@@ -96,6 +102,43 @@ class PolicyTests(unittest.TestCase):
                 self.assertIn(agent.act(self.observation), (Action.GIVE, Action.NOTHING))
                 self.assertEqual(agent.state.memory.device.type, device)
                 self.assertEqual(len(agent.log_probs), 1 if length == 0 else 2)
+
+    def test_value_and_joint_entropy_match_pre_sample_distributions(self):
+        for device in (["cpu", "cuda"] if torch.cuda.is_available() else ["cpu"]):
+            for length in (0, 1, 3):
+                network = RecurrentPolicy(3, max_message_length=length).to(device)
+                agent = AgentPolicy(network)
+                for communicating in (True, False):
+                    logits, state = network(self.observation, agent.state,
+                                            communicating=communicating)
+                    expected_value = network.value_head(state.memory).squeeze(-1)
+                    choice = (agent.communicate(self.observation) if communicating
+                              else agent.act(self.observation))
+                    if communicating and length == 0:
+                        self.assertEqual(choice, ())
+                        self.assertEqual(agent.values, [])
+                        self.assertEqual(agent.entropies, [])
+                        self.assertTrue(torch.equal(agent.state.memory, state.memory))
+                        continue
+                    distribution = torch.distributions.Categorical(logits=logits)
+                    expected_entropy = distribution.entropy() * (length if communicating else 1)
+                    torch.testing.assert_close(agent.values[-1], expected_value)
+                    torch.testing.assert_close(agent.entropies[-1], expected_entropy)
+                    if communicating:
+                        tokens = torch.tensor(choice, device=device)
+                        torch.testing.assert_close(agent.log_probs[-1],
+                                                   distribution.log_prob(tokens).sum())
+                    for statistic in (agent.values[-1], agent.entropies[-1]):
+                        self.assertEqual(statistic.shape, ())
+                        self.assertEqual(statistic.device.type, device)
+                        self.assertIsNotNone(statistic.grad_fn)
+                agent.detach()
+                self.assertEqual(agent.values, [])
+                self.assertEqual(agent.entropies, [])
+                agent.act(self.observation)
+                agent.reset()
+                self.assertEqual(agent.values, [])
+                self.assertEqual(agent.entropies, [])
 
     def test_dimensions_and_incoming_messages_are_validated(self):
         for kwargs in ({"memory_dim": 0}, {"affect_dim": True},

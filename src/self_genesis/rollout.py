@@ -13,11 +13,15 @@ from self_genesis.world import Action, World
 
 @dataclass(frozen=True)
 class PolicyDecision:
+    """Callback data; unsampled empty messages have no log_prob, value or entropy."""
+
     observation: Observation
     choice: tuple[int, ...] | Action
     log_prob: torch.Tensor | None
     state_before: PolicyState
     state_after: PolicyState
+    value: torch.Tensor | None
+    entropy: torch.Tensor | None
 
 
 @dataclass(frozen=True)
@@ -50,9 +54,12 @@ class _RecordingPolicy:
         start = len(self.agent.log_probs)
         choice = (self.agent.communicate(observation) if communicating
                   else self.agent.act(observation))
-        log_prob = self.agent.log_probs[-1] if len(self.agent.log_probs) > start else None
+        sampled = len(self.agent.log_probs) > start
+        log_prob = self.agent.log_probs[-1] if sampled else None
+        value = self.agent.values[-1] if sampled else None
+        entropy = self.agent.entropies[-1] if sampled else None
         self.decisions.append(PolicyDecision(
-            observation, choice, log_prob, before, self.agent.state))
+            observation, choice, log_prob, before, self.agent.state, value, entropy))
         return choice
 
     def communicate(self, observation: Observation) -> tuple[int, ...]:
@@ -127,7 +134,7 @@ class RolloutCollector:
                         bool(result.died[index]), tuple(policy.decisions)))
                 # The returned records retain the graph. Do not accumulate a
                 # second unbounded history in the adapters across collections.
-                agent.log_probs.clear()
+                agent.clear_decisions()
                 if result.died[index]:
                     agent.reset()
             self.elapsed_steps += 1

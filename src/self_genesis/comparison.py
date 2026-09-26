@@ -92,7 +92,7 @@ def evaluate_policy(config: ExperimentConfig, network: RecurrentPolicy | Action)
             if result.died[i]:
                 death_steps[i] = step
             if isinstance(policies[i], AgentPolicy):
-                policies[i].log_probs.clear()
+                policies[i].clear_decisions()
                 if result.died[i]:
                     policies[i].reset()
         if result.done:

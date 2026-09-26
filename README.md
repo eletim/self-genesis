@@ -242,8 +242,9 @@ reproduce a run by also seeding before constructing its network.
 For survival learning, accumulate each agent's rewards backward through its
 trajectory and weight each message/action log probability by that agent's
 reward-to-go, including later steps without encounters. Join consecutive segments
-for complete episode returns, or supply an appropriate estimated future return
-at a truncation boundary; a time limit must not be treated as death. No social
+for complete episode returns from step zero through extinction or the configured
+survival horizon. Training rejects truncated rollouts and uses no truncation
+bootstrap; a collection budget boundary must not be treated as death. No social
 reward or learning objective is added by collection.
 
 Consume the pending loss before `collector.detach()` and an optimizer update.

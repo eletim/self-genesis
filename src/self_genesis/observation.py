@@ -144,9 +144,7 @@ class RunRecorder:
 
     def record_training(self, result, optimizer):
         self._write(
-            "training", loss=result.loss, steps=result.steps,
-            survival_returns=result.survival_returns,
-            terminated=result.terminated, horizon_completed=result.horizon_completed,
+            "training", **asdict(result),
             optimizer=type(optimizer).__qualname__,
             optimizer_settings=[{key: value for key, value in group.items() if key != "params"}
                                 for group in optimizer.param_groups])

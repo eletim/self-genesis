@@ -268,6 +268,18 @@ bonuses. `value_loss_coefficient` defaults to 0.5 and must be positive;
 and must be nonnegative (zero disables the corresponding bonus). All coefficients
 must be finite and can be set in TOML or through the matching CLI flags, such as
 `--message-entropy-coefficient 0`. They are saved with the experiment settings.
+Select `training_method = "actor_critic"` (the default) or `"reinforce"` in TOML,
+or use `--training-method actor_critic|reinforce` with `train` or `compare`.
+Legacy REINFORCE uses `-log_prob * survival_return`, without a value baseline,
+value regression, or entropy bonuses; the existing coefficient settings are
+validated and saved but ignored by that method. Both methods use the same network,
+environment defaults, sampling streams, and complete survival objectives.
+Training results, JSONL training records, and comparison updates include
+`training_method`, total `loss`, and the unweighted, per-agent averaged components
+`actor_loss`, `value_loss`, `action_entropy`, and `message_entropy`.
+REINFORCE records zero for the three unused components; a disabled message
+channel records zero message entropy. The configured coefficients reconstruct
+the total Actor-Critic loss from these components.
 Entropy regularizes the loss without changing survival rewards. Returns are never
 pooled across agents; there are no communication,
 GIVE, cooperation, or internal-state rewards. Memory, thought, and affect learn

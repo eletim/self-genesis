@@ -14,6 +14,10 @@ from self_genesis.training import run_training
 
 class TrainingCommandTests(unittest.TestCase):
     def test_invalid_training_settings(self):
+        self.assertEqual(ExperimentConfig().training_method, 'actor_critic')
+        for value in ('REINFORCE', 'typo', '', None, True, 1, []):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'training_method'):
+                ExperimentConfig(training_method=value)
         for name in ('vocabulary_size', 'max_message_length', 'memory_dim',
                      'affect_dim', 'episodes', 'survival_horizon'):
             for value in (-1, True, 1.5, '2'):
@@ -44,11 +48,13 @@ class TrainingCommandTests(unittest.TestCase):
                               'initial_life = 2\ninitial_points = 0\n'
                               'vocabulary_size = 5\nmax_message_length = 2\n'
                               'memory_dim = 7\naffect_dim = 3\nepisodes = 1\n'
+                              'training_method = "reinforce"\n'
                               'learning_rate = 0.02\nvalue_loss_coefficient = 0.7\n'
                               'action_entropy_coefficient = 0.2\nmessage_entropy_coefficient = 0.3\n')
             command = [sys.executable, '-m', 'self_genesis', 'train',
                        '--config', str(config), '--device', 'cpu', '--seed', '42',
                        '--episodes', '2', '--max-message-length', '0',
+                       '--training-method', 'actor_critic',
                        '--learning-rate', '0.005', '--value-loss-coefficient', '0.8',
                        '--action-entropy-coefficient', '0', '--message-entropy-coefficient', '0.04']
             outputs = []
@@ -71,7 +77,8 @@ class TrainingCommandTests(unittest.TestCase):
                         [r['episode'] for r in records if r['type'] == kind],
                         [r['episode'] for r in starts])
                 self.assertEqual(starts[0]['settings']['seed'], 42)
-                for name, expected in (('value_loss_coefficient', 0.8),
+                for name, expected in (('training_method', 'actor_critic'),
+                                       ('value_loss_coefficient', 0.8),
                                        ('action_entropy_coefficient', 0),
                                        ('message_entropy_coefficient', 0.04)):
                     self.assertEqual(starts[0]['settings'][name], expected)
@@ -81,6 +88,12 @@ class TrainingCommandTests(unittest.TestCase):
                     'max_message_length': 0, 'memory_dim': 7, 'affect_dim': 3})
                 updates = [r for r in records if r['type'] == 'training']
                 self.assertEqual(len(updates), 2)
+                for update in updates:
+                    self.assertEqual(update['training_method'], 'actor_critic')
+                    self.assertEqual(update['message_entropy'], 0)
+                    self.assertAlmostEqual(update['loss'],
+                                           update['actor_loss'] + 0.8 * update['value_loss'],
+                                           places=5)
                 self.assertEqual(updates[0]['optimizer_settings'][0]['lr'], 0.005)
                 self.assertEqual(updates[0]['survival_returns'], [2, 2, 2])
                 self.assertNotEqual(updates[0]['loss'], updates[1]['loss'])

@@ -8,7 +8,7 @@ import torch
 from self_genesis.config import ExperimentConfig
 from self_genesis.policy import RecurrentPolicy
 from self_genesis.rollout import RolloutCollector
-from self_genesis.training import survival_policy_loss, train_episode
+from self_genesis.training import survival_loss_components, survival_policy_loss, train_episode
 
 
 class TrainingTests(unittest.TestCase):
@@ -63,9 +63,14 @@ class TrainingTests(unittest.TestCase):
                 for channel, decision in enumerate(items[0].decisions))
             experiences.append((replace(items[0], decisions=decisions), *items[1:]))
         rollout = replace(rollout, experiences=tuple(experiences))
-        loss = survival_policy_loss(
+        components = survival_loss_components(
             rollout, value_loss_coefficient=0.7,
             action_entropy_coefficient=0.2, message_entropy_coefficient=0.3)
+        loss = components.loss
+        self.assertAlmostEqual(components.actor_loss.item(), 0.875)
+        self.assertAlmostEqual(components.value_loss.item(), 1.9375)
+        self.assertAlmostEqual(components.action_entropy.item(), 0.3)
+        self.assertAlmostEqual(components.message_entropy.item(), 0.2)
         # Returns are 1 and 3; each agent has one message and one action.
         # Actor = 1.75 / 2, value = 3.875 / 2, entropy bonus = 0.24 / 2.
         self.assertAlmostEqual(loss.item(), 2.11125, places=6)
@@ -115,12 +120,63 @@ class TrainingTests(unittest.TestCase):
             collector.config, value_loss_coefficient=0.8,
             action_entropy_coefficient=0.03, message_entropy_coefficient=0)
         optimizer = torch.optim.Adam(collector.network.parameters(), lr=0.001)
-        with patch("self_genesis.training.survival_policy_loss",
-                   wraps=survival_policy_loss) as loss:
+        with patch("self_genesis.training.survival_loss_components",
+                   wraps=survival_loss_components) as loss:
             train_episode(collector, optimizer)
         self.assertEqual(loss.call_args.kwargs, dict(
+            training_method="actor_critic",
             value_loss_coefficient=0.8, action_entropy_coefficient=0.03,
             message_entropy_coefficient=0))
+
+    def test_reinforce_preserves_legacy_returns_and_ignores_value_and_entropy(self):
+        collector = self.collector()
+        collector.world.state.life[:] = torch.tensor([1, 3])
+        rollout = collector.collect(3)
+        logs, experiences = [], []
+        for items in rollout.experiences:
+            decisions = []
+            for decision in items[0].decisions:
+                log = torch.tensor(-0.5, requires_grad=True)
+                logs.append(log)
+                decisions.append(replace(decision, log_prob=log, value=None, entropy=None))
+            experiences.append((replace(items[0], decisions=tuple(decisions)), *items[1:]))
+        rollout = replace(rollout, experiences=tuple(experiences))
+        components = survival_loss_components(
+            rollout, training_method="reinforce", value_loss_coefficient=10,
+            action_entropy_coefficient=20, message_entropy_coefficient=30)
+        self.assertEqual(components.loss.item(), 2.0)
+        self.assertEqual(components.actor_loss.item(), 2.0)
+        for component in (components.value_loss, components.action_entropy,
+                          components.message_entropy):
+            self.assertEqual(component.item(), 0)
+            self.assertFalse(component.requires_grad)
+        components.loss.backward()
+        self.assertEqual([log.grad.item() for log in logs], [-0.5, -0.5, -1.5, -1.5])
+        with self.assertRaisesRegex(ValueError, "training_method"):
+            survival_policy_loss(rollout, training_method="typo")
+        with self.assertRaisesRegex(ValueError, "complete episode"):
+            survival_policy_loss(replace(rollout, truncated=True), training_method="reinforce")
+
+    def test_reinforce_updates_recurrent_policy_without_training_value_head(self):
+        for length in (0, 3):
+            collector = self.collector(length)
+            collector.config = replace(collector.config, training_method="reinforce")
+            optimizer = torch.optim.Adam(collector.network.parameters(), lr=0.01)
+            for _ in range(2):
+                before = {n: p.detach().clone() for n, p in collector.network.named_parameters()}
+                result = train_episode(collector, optimizer)
+                self.assertEqual(result.training_method, "reinforce")
+                self.assertEqual(result.loss, result.actor_loss)
+                self.assertEqual(result.value_loss, 0)
+                self.assertEqual(result.action_entropy, 0)
+                self.assertEqual(result.message_entropy, 0)
+                for name, parameter in collector.network.named_parameters():
+                    if name.startswith("value_head") or (length == 0 and name.startswith("message_head")):
+                        self.assertIsNone(parameter.grad, name)
+                        self.assertTrue(torch.equal(parameter, before[name]), name)
+                    else:
+                        self.assertTrue(torch.isfinite(parameter.grad).all(), name)
+                        self.assertFalse(torch.equal(parameter, before[name]), name)
 
     def test_finite_gradients_through_heads_and_recurrent_states(self):
         collector = self.collector()

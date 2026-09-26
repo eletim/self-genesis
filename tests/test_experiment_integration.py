@@ -24,6 +24,8 @@ class ExperimentIntegrationTests(unittest.TestCase):
                 '--config', str(ROOT / 'configs/default.toml'),
                 '--seed', '42', '--device', device, '--episodes', '2',
                 '--initial-life', '3', '--initial-points', '1',
+                '--point-generation-probability-min', '0',
+                '--point-generation-probability-max', '0',
                 '--output', str(output),
             ], check=True, capture_output=True, text=True)
             run = json.loads(completed.stdout)

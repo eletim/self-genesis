@@ -2,8 +2,11 @@
 
 Run these commands from the repository root on Linux with Python 3.12. The
 examples use one shared recurrent policy, independent agent memory/affect,
-a bounded token channel, finite Points, and survival-only REINFORCE. They do
+a bounded token channel, scarce renewable Points, and survival-only REINFORCE. They do
 not add social rewards, identity labels, or auxiliary objectives.
+
+For the matched v0.0.4 comparison, reproduction commands, and observed policy
+behavior, see [the renewable experiment record](renewable-experiment.md).
 
 ## Small CPU run
 
@@ -20,6 +23,7 @@ python -m pip check
 mkdir -p /tmp/self-genesis-runs
 python -m self_genesis train --config configs/default.toml \
   --device cpu --seed 42 --episodes 2 --initial-life 3 --initial-points 1 \
+  --survival-horizon 12 \
   --output /tmp/self-genesis-runs/cpu.jsonl
 python examples/analyze_run.py /tmp/self-genesis-runs/cpu.jsonl
 ```
@@ -27,7 +31,8 @@ python examples/analyze_run.py /tmp/self-genesis-runs/cpu.jsonl
 Choose a fresh output filename on every run: existing files are rejected.
 This uses four agents, eight Appearance dimensions, four tokens, three tokens
 per message, 16 memory dimensions, four affect dimensions, and Adam at 0.001.
-Each of the two updates lasts at most `3 + 4 * 1 = 7` world steps. Nothing is
+Generation abilities are sampled in [0.1, 0.3]. Each of the two updates lasts
+at most 12 world steps, ending earlier at extinction. Nothing is
 saved in the repository by these run commands.
 
 ## Single RTX 5090 run
@@ -60,6 +65,7 @@ PY
 mkdir -p /tmp/self-genesis-runs
 python -m self_genesis train --config configs/default.toml \
   --device cuda --seed 42 --episodes 2 --initial-life 3 --initial-points 1 \
+  --survival-horizon 12 \
   --output /tmp/self-genesis-runs/rtx5090.jsonl
 python examples/analyze_run.py /tmp/self-genesis-runs/rtx5090.jsonl
 ```
@@ -117,11 +123,14 @@ messages/actions, observations, and memory/affect before and after each callback
 contains initial Appearance and effective settings. Agent indices are analysis
 keys only, never policy inputs. Each `summary` is cumulative: do not sum repeated
 summaries from continued API collection. Surviving lifetimes at truncation are
-censored, not completed deaths. GIVE counts are attempts, including attempts
+censored, not completed deaths. The same applies at a completed survival horizon:
+`mean_survival_time` is null while anyone survives. Inspect summary `lifetimes`,
+`mean_observed_lifetime`, `terminated`, and `horizon_completed` to distinguish
+censored finite-horizon returns from completed lifetimes. GIVE counts are attempts, including attempts
 without Points; `successful_transfers` identifies actual directed aid.
 
 ```sh
-python -m unittest discover -s tests -p 'test_experiment_integration.py' -v
+python -m unittest discover -s tests -p 'test*integration.py' -v
 python -m unittest discover -s tests -v
 python -m compileall -q src tests examples
 python -m pip check
@@ -130,14 +139,17 @@ python -m pip check
 The integration tests run training and analysis in separate processes, reconstruct
 per-agent returns, the survival policy loss, deaths, and message/action counts
 from raw steps, check finite latent states, and reject interrupted output.
-Existing training tests verify gradients and actual parameter updates, including
-memory and affect feedback. CUDA cases skip when CUDA is unavailable; a skipped
+Renewable integration tests additionally reconstruct per-agent transfers and
+generation, verify prior-only relationship rows and hidden-ability isolation,
+exercise horizon censoring and extinction, and match CLI training results to
+repeated learned/fixed-policy comparisons. Existing training tests verify
+gradients and actual parameter updates, including memory and affect feedback. CUDA cases skip when CUDA is unavailable; a skipped
 case is not hardware validation. Do not compare exact CPU and CUDA trajectories:
 backend sampling and numerical results can differ. These tiny runs establish
 execution and observable training, not learned cooperation, communication
 semantics, or self-representation.
 
-## Validation record
+## Historical v0.0.3 validation record
 
 The following historical results predate the fix that preserves sampling streams
 across episode resets. Exact trajectories and losses change with that fix.

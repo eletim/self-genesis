@@ -1,4 +1,4 @@
-# Scarce renewable Points for bounded World / RolloutCollector experiments.
+# Minimal renewable preset, equivalent to the full configs/default.toml.
 # Explicit finite survival objective for renewable training.
 survival_horizon = 100
 initial_points = 3

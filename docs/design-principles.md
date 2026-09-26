@@ -13,9 +13,18 @@ self-genesis は、複数の学習Agentが他者との相互作用を通じて�
 
 本書と[代表シナリオ](representative-scenarios.md)は、
 [Issue #15](https://github.com/eletim/self-genesis/issues/15)で導入する環境の契約を定める。
-再生成・有限horizon・解析ログの実装は後続の作業項目で行う。
+再生成・有限horizon・解析ログを含むこの環境契約はv0.0.5でも維持する。
 v0.0.3の初期Pointを使い切る環境と比較し、他者を区別して過去の関係を利用することが
 生存上有利になり得る環境圧を調べる。援助相手の選別や協力が必ず学習されるとは仮定しない。
+
+## v0.0.5 の学習契約（Issue #24）
+
+[Issue #24](https://github.com/eletim/self-genesis/issues/24)では、v0.0.4のproducer oracleが
+always GIVEを上回る一方、学習済みNNがalmost-always-GIVE / almost-always-NOTHINGへ
+偏った結果を受け、学習則だけを変えて比較する。
+Value baseline・Advantage・Entropyにより早期collapseを抑え、条件依存の行動と
+held-out survivalが改善するかを検証する。改善や協力の獲得を前提にはしない。
+以下は最小限のActor-Criticへ拡張するための契約であり、この文書変更自体は実装完了を意味しない。
 
 ## 1. シンプルさを優先する
 
@@ -172,9 +181,65 @@ Observation、Working Memory、感性、思考は一方向のpipelineではな�
 学習アルゴリズムも固定的な思想として扱わず、
 この環境でend-to-endに学習できる妥当な方法を選ぶ。
 
-v0.0.4では環境圧の効果を比較するため、既存のNN形状、Working Memory、感性latent、
-Communication構造を維持する。学習もREINFORCEと各個体のsurvival-only reward-to-goを基本とし、
-有限horizonへの対応に必要な最小限の調整に留める。
+v0.0.4のREINFORCEを比較元とし、v0.0.5では各個体のsurvival-only reward-to-goを
+維持した最小限のActor-Criticへ拡張する。以下のValue head以外は、既存のNN形状・次元、
+Observation、Working Memory、感性latentの循環、Communication構造を維持する。
+renewable resource worldの規則、Encounterの順序、固定Appearanceも変更しない。
+Working Memoryのentity / associative memory化、NNの大型化や別architecture化、
+world ruleの再設計、自己・他者のidentity label追加、supervised auxiliary taskは行わない。
+PPOのclippingや旧policyとの比率を用いる更新など、大規模な学習方式変更も対象外とする。
+
+### Survival returnとValue baseline
+
+各Agent iのworld step tに対して、G_i,tを、そのstepから自身の死亡または設定した
+survival horizonまでのsurvival Rewardの非割引和（gamma = 1）とする。
+死亡する最後のstep、Encounterに選ばれないstep、単独生存中のstepのRewardも含める。
+他Agentのreturnを混ぜたり、集団のreturnで置き換えたりしない。
+
+既存の共有recurrent networkにscalar Value headを追加する。
+各message / actionのサンプリング直前に、そのcallbackのObservationと個体固有の
+Working Memory・感性から得た既存のrecurrent表現h_i,dを使い、
+V_i,d = V(h_i,d)で、その個体のG_i,tを予測する（dはstep t内のdecision）。
+同じstepのmessageとactionには同じG_i,tを用いるが、各callback時点の情報に応じて
+Valueは異なってよい。Valueはそのdecisionのsample結果や未来の観測を入力に使わない。
+生成能力、個体ID、解析専用ログなどの特権情報もActor / Criticへ追加しない。
+共有するのは重みであり、個体間のrecurrent stateは混同しない。
+
+### Advantage・Value・Entropyの目的関数
+
+実際にサンプリングしたdecisionについて、次のlossを用いる。
+各項はdecisionについて和を取り、既存と同じくepisode開始時のAgent数Nで割る。
+
+- Advantage: A_i,d = G_i,t − V_i,d。
+- Actor loss: L_actor = −sum(log pi_i,d(choice) * stop_gradient(A_i,d)) / N。
+  Advantageはpolicy更新時にdetachし、Actor lossからValue予測へは勾配を流さない。
+- Critic loss: L_value = sum((V_i,d − stop_gradient(G_i,t))^2) / N。
+  Value headと共有recurrent表現を自身のsurvival returnの回帰で学習する。
+- Action entropy: H_actionはGIVE / NOTHINGのcategorical分布のentropyの和 / N。
+- Message entropy: H_messageは各messageのtoken分布のentropyをslot間で足し、
+  message decisionについて和を取った値 / N。既存の独立token samplingでは
+  messageのlog probabilityもtokenごとのlog probabilityの和とする。
+- 最小化する総loss: L = L_actor + c_value * L_value
+  − beta_action * H_action − beta_message * H_message。
+  c_valueは正、entropy係数は非負の設定値として実験条件に記録する。
+  entropy bonusを使う比較では対応する係数を正にし、ゼロによる無効化も可能とする。
+
+Entropyは探索のための正則化であり、world Rewardやsurvival returnへ足さない。
+GIVE、協力、会話、返報へのsocial / cooperation / communication rewardは導入しない。
+Value回帰以外に補助的な教師信号を追加せず、tokenや感性latentに意味の正解を与えない。
+message長が0ならmessageのActor・Value・Entropy項は作らず、内部状態の更新は維持する。
+非参加stepの自動NOTHINGにもdecision lossを作らないが、そのstepのRewardはreturnへ含める。
+離散sampleにはscore-function勾配を使い、Working Memory・感性へのrecurrent勾配を維持する。
+
+### 有限horizonと収集境界
+
+更新にはstep zeroから死亡・全員死亡または明示的なsurvival horizonまでの完全な経験を使う。
+死亡後と目的として定めたhorizonの後にはreturnを加えず、Value bootstrapもterminal bonusも使わない。
+horizon到達は死亡ではなく、生存個体の寿命は引き続き打ち切りとして記録する。
+単なるcollection budgetの終了は未完のtruncationであり、完全なepisodeとして更新しない。
+継続収集ではrecurrent stateとgraphを保持し、完全な目的区間を揃える。
+再生成ありの学習では明示的な有限horizonを必須とし、再生成なしでは従来どおり全員死亡までの
+学習も許容する。episode境界でstateをresetし、更新に使うlossの処理前にはgraphをdetachしない。
 
 ## 12. 観察可能性を保つ
 
@@ -187,6 +252,12 @@ Working Memoryや感性latentを後から解析できるようにする。
 生成能力と実際のstepごとの生成量は解析専用ログに記録してよいが、policy inputへ流さない。
 GIVEの試行と成功した有向の援助を区別し、Appearanceによる同一相手との再Encounter、
 過去に受けたGIVE / 非GIVE、自分から行ったGIVEと後続の行動との関係を解析できるようにする。
-既存メトリクスを維持し、同じ資源・時間・Rewardの規則でalways GIVE / always NOTHINGとも比較する。
+既存メトリクスを維持し、v0.0.4と同じ資源・時間・Rewardの規則で学習済みpolicy、
+always GIVE、always NOTHING、producer oracleを比較する。oracleの生成能力へのアクセスは
+比較用に限定し、学習済みpolicyへは渡さない。可能なら従来REINFORCEとも環境条件・NN構造・
+学習予算・seedを揃えたmatched comparisonを行う。
+seedごとのGIVE率collapse、held-out survival、partner-history依存の行動、
+Appearance shuffle / Working Memory resetによる性能差、Communication利用の変化を確認する。
+これらの解析・介入結果を追加Rewardや教師信号にはしない。
 
 ただし解析機能のために学習系を過度に複雑化しない。

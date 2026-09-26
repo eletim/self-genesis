@@ -2,14 +2,16 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import torch
 
 from self_genesis.config import ExperimentConfig
 from self_genesis.observation import RunRecorder
-from self_genesis.policy import RecurrentPolicy
+from self_genesis.policy import AgentPolicy, RecurrentPolicy
 from self_genesis.rollout import RolloutCollector
 from self_genesis.training import train_episode
+from self_genesis.world import Action
 
 
 class ObservationTests(unittest.TestCase):
@@ -22,6 +24,83 @@ class ObservationTests(unittest.TestCase):
 
     def read(self, path):
         return [json.loads(line) for line in path.read_text().splitlines()]
+
+    def test_resource_reconstruction_and_horizon_censoring(self):
+        for probability in (0, 1):
+            with self.subTest(probability=probability), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'run.jsonl'
+                config = ExperimentConfig(
+                    num_agents=3, appearance_dim=2, initial_life=2, initial_points=0,
+                    point_generation_probability_min=probability,
+                    point_generation_probability_max=probability, survival_horizon=4)
+                with RunRecorder(path) as recorder, patch.object(
+                        AgentPolicy, 'act', return_value=Action.GIVE):
+                    collector = RolloutCollector(config, RecurrentPolicy(2), recorder=recorder)
+                    collector.collect(1)
+                    collector.collect(10)
+                    collector.collect(1)  # No duplicate events after either ending.
+                    collector.reset()
+                    collector.collect(1)
+                rows = self.read(path)
+                episode = [row for row in rows if row['episode'] == 0]
+                start = episode[0]
+                self.assertEqual(start['point_generation_probability'], [probability] * 3)
+                life, points = start['life'][:], start['points'][:]
+                steps = [row for row in episode if row['type'] == 'step']
+                self.assertEqual(len(steps), 4 if probability else 2)
+                self.assertEqual(steps[0]['successful_transfers'], [])
+                self.assertEqual(steps[0]['generated_points'], [probability] * 3)
+                self.assertEqual(sum(c['choice'] == 'GIVE' for c in
+                                     steps[0]['callbacks']), 2)
+                transfers = 0
+                for step in steps:
+                    alive = [value > 0 for value in life]
+                    incoming, outgoing = [0] * 3, [0] * 3
+                    for event in step['successful_transfers']:
+                        donor, recipient = event['donor'], event['recipient']
+                        self.assertNotEqual(donor, recipient)
+                        self.assertTrue(alive[donor] and alive[recipient])
+                        self.assertGreater(points[donor], 0)
+                        self.assertEqual(set((donor, recipient)), set(step['participants']))
+                        outgoing[donor] += 1
+                        incoming[recipient] += 1
+                        transfers += 1
+                    life = [max(0, value + incoming[i] - alive[i])
+                            for i, value in enumerate(life)]
+                    self.assertEqual(step['generated_points'],
+                                     [probability if value > 0 else 0 for value in life])
+                    points = [value - outgoing[i] + step['generated_points'][i]
+                              for i, value in enumerate(points)]
+                    self.assertEqual(step['life'], life)
+                    self.assertEqual(step['points'], points)
+                    for callback in step['callbacks']:
+                        self.assertEqual(set(callback['observation']), {
+                            'life', 'points', 'partner_life', 'partner_points',
+                            'partner_appearance', 'first', 'received_message', 'partner_action'})
+                summaries = [row for row in episode if row['type'] == 'summary']
+                self.assertTrue(summaries[0]['truncated'])
+                summary = summaries[-1]
+                self.assertEqual(summary['collection_steps'], 0)
+                self.assertEqual(summary['horizon_completed'], bool(probability))
+                self.assertEqual(summary['terminated'], not probability)
+                self.assertFalse(summary['truncated'])
+                self.assertEqual(summary['action_counts']['GIVE'], 2 * len(steps))
+                self.assertLess(transfers, summary['action_counts']['GIVE'])
+                self.assertEqual([x['censored'] for x in summary['lifetimes']],
+                                 [value > 0 for value in life])
+                if probability:
+                    self.assertEqual(transfers, 6)
+                    self.assertEqual(summary['deaths'], 1)
+                    self.assertEqual(summary['mean_completed_lifetime'], 2)
+                    self.assertIsNone(summary['mean_survival_time'])
+                else:
+                    self.assertEqual(summary['mean_survival_time'], 2)
+                reset_start = next(row for row in rows
+                                   if row['episode'] == 1 and row['type'] == 'episode_start')
+                self.assertEqual(reset_start['point_generation_probability'],
+                                 start['point_generation_probability'])
+                self.assertEqual(reset_start['appearance'], start['appearance'])
+                self.assertEqual(rows[-1]['action_counts']['GIVE'], 2)
 
     def test_continuation_censoring_and_history(self):
         with tempfile.TemporaryDirectory() as directory:

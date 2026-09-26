@@ -27,6 +27,8 @@ class StepResult:
     died: torch.Tensor
     done: bool
     generated_points: torch.Tensor
+    # Directed (donor, recipient) pairs; each spends one Point and restores one Life.
+    successful_transfers: tuple[tuple[int, int], ...]
 
 
 class World:
@@ -74,11 +76,13 @@ class World:
 
         alive = self.alive
         restored = torch.zeros_like(state.life)
+        transfers = []
         for donor, decision in enumerate(decisions):
             if (decision.action is Action.GIVE and alive[donor]
                     and alive[decision.target] and state.points[donor] > 0):
                 state.points[donor] -= 1
                 restored[decision.target] += 1
+                transfers.append((donor, decision.target))
         state.life.add_(restored).sub_(alive.to(state.life.dtype)).clamp_(min=0)
         survivors = self.alive
         generated = torch.zeros_like(state.points)
@@ -91,4 +95,5 @@ class World:
             died=alive & ~survivors,
             done=not bool(survivors.any()),
             generated_points=generated,
+            successful_transfers=tuple(transfers),
         )

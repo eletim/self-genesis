@@ -1,6 +1,6 @@
 """Fixed-policy outcomes and matched, reproducible comparison reports."""
 
-from dataclasses import replace
+from dataclasses import fields, replace
 import json
 from pathlib import Path
 import subprocess
@@ -11,14 +11,96 @@ from unittest.mock import patch
 
 import torch
 
-from self_genesis.comparison import evaluate_policy, run_comparison
+from self_genesis.comparison import (ProducerOracle, _ProducerObservation,
+                                     evaluate_policy, run_comparison)
 from self_genesis.config import ExperimentConfig
-from self_genesis.encounter import EncounterProtocol
+from self_genesis.encounter import EncounterProtocol, Observation
 from self_genesis.policy import RecurrentPolicy
-from self_genesis.world import Action
+from self_genesis.world import Action, World
 
 
 class ComparisonTests(unittest.TestCase):
+    def test_oracle_selects_producers_and_sends_empty_messages(self):
+        config = ExperimentConfig(num_agents=4, point_generation_probability_max=1,
+                                  survival_horizon=3)
+        world = World(config)
+        world.state.point_generation_probability[:] = torch.tensor([0, 0.25, 0.5, 1.0])
+        oracle = ProducerOracle(world, config)
+        for i, expected in enumerate((Action.NOTHING, Action.NOTHING,
+                                      Action.GIVE, Action.GIVE)):
+            for points in (0, 1):
+                observation = _ProducerObservation(
+                    2, points, 2, 0, world.state.appearance[i], True, (), None,
+                    float(world.state.point_generation_probability[i]))
+                self.assertEqual(oracle.communicate(observation), ())
+                self.assertIs(oracle.act(observation), expected)
+        self.assertEqual({field.name for field in fields(Observation)}, {
+            'life', 'points', 'partner_life', 'partner_points', 'partner_appearance',
+            'first', 'received_message', 'partner_action'})
+
+    def test_oracle_distinguishes_partners_with_duplicate_appearances(self):
+        config = ExperimentConfig(num_agents=4, initial_life=10, initial_points=5,
+                                  point_generation_probability_max=1, survival_horizon=5)
+        world = World(config)
+        world.state.appearance.zero_()
+        world.state.point_generation_probability[:] = torch.tensor([0.0, 1.0, 0.0, 1.0])
+        with patch('self_genesis.comparison.World', return_value=world):
+            report = evaluate_policy(config, ProducerOracle)
+        actions = report['relationship_actions']
+        self.assertEqual(len(actions), 10)
+        self.assertEqual({row['action'] for row in actions}, {'GIVE', 'NOTHING'})
+        for row in actions:
+            expected = 'GIVE' if row['partner'] in (1, 3) else 'NOTHING'
+            self.assertEqual(row['action'], expected)
+            self.assertEqual(row['successful_aid'], expected == 'GIVE')
+
+    def test_oracle_uses_shared_transfer_decay_and_generation_rules(self):
+        config = ExperimentConfig(num_agents=2, initial_life=2, initial_points=1,
+                                  point_generation_probability_max=1, survival_horizon=5)
+        world = World(config)
+        world.state.point_generation_probability[:] = torch.tensor([0.0, 1.0])
+        with patch('self_genesis.comparison.World', return_value=world):
+            report = evaluate_policy(config, ProducerOracle)
+        self.assertEqual(report['survival_returns'], [2, 3])
+        self.assertEqual(report['successful_aid'], 1)
+        self.assertEqual(report['action_counts'], {'GIVE': 2, 'NOTHING': 2})
+        self.assertEqual(report['final_points'], [0, 3])
+        self.assertTrue(report['terminated'])
+        for row in report['relationship_actions']:
+            self.assertEqual(row['action'], 'GIVE' if row['partner'] == 1 else 'NOTHING')
+        zero = replace(config, point_generation_probability_max=0)
+        self.assertEqual(evaluate_policy(zero, ProducerOracle),
+                         evaluate_policy(zero, Action.NOTHING))
+        for probability in (0.7, 1.0):
+            all_producers = replace(config, initial_points=0,
+                                    point_generation_probability_min=probability,
+                                    point_generation_probability_max=probability)
+            self.assertEqual(evaluate_policy(all_producers, ProducerOracle),
+                             evaluate_policy(all_producers, Action.GIVE))
+
+    def test_full_comparison_preserves_trained_weights(self):
+        snapshots = []
+
+        def checked_evaluation(config, policy):
+            if isinstance(policy, RecurrentPolicy):
+                snapshots.append((policy, {key: value.clone() for key, value
+                                           in policy.state_dict().items()}))
+                self.assertFalse(policy.training)
+            result = evaluate_policy(config, policy)
+            for network, before in snapshots:
+                for key, value in network.state_dict().items():
+                    self.assertTrue(torch.equal(value, before[key]))
+            return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch('self_genesis.comparison.evaluate_policy',
+                       side_effect=checked_evaluation) as evaluation:
+                run_comparison(ExperimentConfig(num_agents=2, initial_life=3,
+                                               episodes=1, survival_horizon=2),
+                               Path(directory) / 'report.json', evaluation_seeds=[101, 102])
+            self.assertEqual(evaluation.call_count, 8)
+            self.assertEqual(len(snapshots), 2)
+
     def test_zero_generation_extinction_and_attempts(self):
         config = ExperimentConfig(num_agents=2, initial_life=2, initial_points=1)
         give = evaluate_policy(config, Action.GIVE)
@@ -74,7 +156,7 @@ class ComparisonTests(unittest.TestCase):
                                            initial_life=2, initial_points=1,
                                            episodes=1, survival_horizon=2), output)
             rows = json.loads(output.read_text())['evaluations']
-            self.assertEqual(len(rows), 3)
+            self.assertEqual(len(rows), 4)
             for row in rows:
                 self.assertEqual(row['resolved_device'], 'cuda:0')
                 self.assertEqual(row['survival_returns'], [2, 2])
@@ -88,6 +170,8 @@ class ComparisonTests(unittest.TestCase):
                         survival_horizon=5, max_message_length=length)
                     network = RecurrentPolicy(
                         config.appearance_dim, max_message_length=length).to(device)
+                    network.register_forward_pre_hook(
+                        lambda module, args: self.assertIs(type(args[0]), Observation))
                     agents = []
                     original_step = EncounterProtocol.step
 
@@ -120,6 +204,7 @@ class ComparisonTests(unittest.TestCase):
         before = {key: value.clone() for key, value in network.state_dict().items()}
         first = evaluate_policy(config, network)
         evaluate_policy(config, Action.GIVE)
+        evaluate_policy(config, ProducerOracle)
         self.assertEqual(first, evaluate_policy(config, network))
         for key, value in network.state_dict().items():
             self.assertTrue(torch.equal(value, before[key]))
@@ -137,7 +222,7 @@ class ComparisonTests(unittest.TestCase):
                 output = Path(directory) / name
                 result = subprocess.run(command + ['--output', str(output)],
                                         check=True, capture_output=True, text=True)
-                self.assertEqual(json.loads(result.stdout)['evaluations'], 6)
+                self.assertEqual(json.loads(result.stdout)['evaluations'], 8)
                 reports.append(json.loads(output.read_text()))
             self.assertEqual(*reports)
             report = reports[0]
@@ -145,7 +230,8 @@ class ComparisonTests(unittest.TestCase):
             for seed in (7, 8):
                 rows = [r for r in report['evaluations'] if r['seed'] == seed]
                 self.assertEqual([r['policy'] for r in rows],
-                                 ['learned', 'always-GIVE', 'always-NOTHING'])
+                                 ['learned', 'always-GIVE', 'always-NOTHING',
+                                  'producer-oracle'])
                 for row in rows:
                     self.assertEqual(row['initial'], rows[0]['initial'])
                     self.assertEqual(row['config'], rows[0]['config'])

@@ -1,6 +1,6 @@
-"""Matched evaluations of learned and fixed policies using shared world rules."""
+"""Matched evaluations of learned, fixed, and oracle policies using shared world rules."""
 
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 import json
 from pathlib import Path
 
@@ -8,7 +8,7 @@ import torch
 
 from self_genesis.analysis import RelationshipAnalysis
 from self_genesis.config import ExperimentConfig
-from self_genesis.encounter import EncounterProtocol
+from self_genesis.encounter import EncounterProtocol, Observation
 from self_genesis.experiment import resolve_device
 from self_genesis.policy import AgentPolicy, RecurrentPolicy
 from self_genesis.rollout import RolloutCollector
@@ -27,6 +27,43 @@ class FixedPolicy:
 
     def act(self, observation):
         return self.action
+
+
+@dataclass(frozen=True)
+class _ProducerObservation(Observation):
+    partner_generation_probability: float
+
+
+class _ProducerOracleProtocol(EncounterProtocol):
+    """Route privileged ability only during oracle evaluation, by partner index."""
+
+    def _observe(self, agent, partner, **kwargs):
+        observation = super()._observe(agent, partner, **kwargs)
+        return _ProducerObservation(
+            **vars(observation),
+            partner_generation_probability=float(
+                self.world.state.point_generation_probability[partner]))
+
+
+class ProducerOracle:
+    """Evaluation-only aid to positive producers at or above the range midpoint.
+
+    Privileged partner ability arrives only through oracle observations, never
+    through learned observations, the network, or its training collector.
+    """
+
+    def __init__(self, world: World, config: ExperimentConfig):
+        midpoint = (config.point_generation_probability_min
+                    + config.point_generation_probability_max) / 2
+        self.threshold = world.state.point_generation_probability.new_tensor(midpoint).item()
+
+    def communicate(self, observation):
+        return ()
+
+    def act(self, observation):
+        probability = observation.partner_generation_probability
+        return (Action.GIVE if probability > 0 and probability >= self.threshold
+                else Action.NOTHING)
 
 
 class _ActionRecorder:
@@ -64,14 +101,17 @@ def _action_metrics(rows):
 
 
 @torch.no_grad()
-def evaluate_policy(config: ExperimentConfig, network: RecurrentPolicy | Action) -> dict:
+def evaluate_policy(config: ExperimentConfig,
+                    network: RecurrentPolicy | Action | type[ProducerOracle]) -> dict:
     """Fresh world and policy state for one seed; never update learned weights."""
     budget = _budget(config)
     world = World(config)
-    protocol = EncounterProtocol(world, seed=config.seed,
-                                 vocabulary_size=config.vocabulary_size,
-                                 max_message_length=config.max_message_length)
-    policies = [(FixedPolicy(network) if isinstance(network, Action) else AgentPolicy(network))
+    protocol_type = _ProducerOracleProtocol if network is ProducerOracle else EncounterProtocol
+    protocol = protocol_type(world, seed=config.seed,
+                             vocabulary_size=config.vocabulary_size,
+                             max_message_length=config.max_message_length)
+    policies = [(ProducerOracle(world, config) if network is ProducerOracle else
+                 FixedPolicy(network) if isinstance(network, Action) else AgentPolicy(network))
                 for _ in range(config.num_agents)]
     initial = dict(appearance=world.state.appearance.tolist(),
                    point_generation_probability=world.state.point_generation_probability.tolist())
@@ -121,7 +161,7 @@ def evaluate_policy(config: ExperimentConfig, network: RecurrentPolicy | Action)
 
 
 def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=None) -> dict:
-    """Train once, then evaluate three policies separately for each matched seed."""
+    """Train once, then evaluate four policies separately for each matched seed."""
     _budget(config)
     seeds = [config.seed] if evaluation_seeds is None else list(evaluation_seeds)
     if not seeds:
@@ -142,7 +182,8 @@ def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=N
         evaluations = []
         for condition in conditions:
             for name, policy in (("learned", network), ("always-GIVE", Action.GIVE),
-                                 ("always-NOTHING", Action.NOTHING)):
+                                 ("always-NOTHING", Action.NOTHING),
+                                 ("producer-oracle", ProducerOracle)):
                 evaluations.append(dict(policy=name, **evaluate_policy(condition, policy)))
         report = dict(schema_version=1, config=asdict(config), training=updates,
                       evaluation_seeds=seeds, evaluations=evaluations)

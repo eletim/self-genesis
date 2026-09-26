@@ -23,7 +23,8 @@ def analyze(path):
             elif kind == 'summary':
                 summary = record
             elif kind == 'training':
-                if summary is None or not summary['terminated'] or summary['truncated']:
+                if (summary is None or summary['truncated']
+                        or not (summary['terminated'] or summary.get('horizon_completed', False))):
                     raise ValueError('Training requires a complete episode summary')
                 yield {
                     'episode': record['episode'], 'device': start['resolved_device'],

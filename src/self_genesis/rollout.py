@@ -35,6 +35,7 @@ class Rollout:
     steps: int
     terminated: bool
     truncated: bool
+    horizon_completed: bool = False
 
 
 class _RecordingPolicy:
@@ -64,9 +65,10 @@ class _RecordingPolicy:
 class RolloutCollector:
     """Own one world and independent adapters around shared policy weights.
 
-    collect() stops at extinction or its step budget. A budget boundary is a
-    truncation, not a death or an automatic reset: another collect() continues
-    the same episode and recurrent graph. Consume losses before detach() and
+    collect() stops at extinction, the survival horizon, or its step budget.
+    A budget boundary before either ending is a truncation: another collect()
+    continues the same episode and recurrent graph. After horizon completion,
+    collect() returns an empty completed segment until reset(). Consume losses before detach() and
     optimizer updates. reset() explicitly starts the configured episode anew.
     Returned records own their decision references and survive reset/detach.
     """
@@ -110,7 +112,9 @@ class RolloutCollector:
             raise ValueError("max_steps must be a positive integer")
         experiences: list[list[AgentExperience]] = [[] for _ in self.agents]
         steps = 0
-        while steps < max_steps and bool(self.world.alive.any()):
+        horizon = self.config.survival_horizon
+        while (steps < max_steps and bool(self.world.alive.any())
+               and (horizon is None or self.elapsed_steps < horizon)):
             alive = self.world.alive.tolist()
             policies = [_RecordingPolicy(agent) for agent in self.agents]
             result = self.protocol.step(policies)
@@ -129,8 +133,11 @@ class RolloutCollector:
             self.elapsed_steps += 1
             steps += 1
         terminated = not bool(self.world.alive.any())
+        horizon_completed = (not terminated and horizon is not None
+                             and self.elapsed_steps >= horizon)
         if self.recorder is not None:
             self.recorder.record_summary(
-                self, max_steps=max_steps, steps=steps, terminated=terminated)
+                self, max_steps=max_steps, steps=steps, terminated=terminated,
+                horizon_completed=horizon_completed)
         return Rollout(tuple(tuple(items) for items in experiences), steps,
-                       terminated, not terminated)
+                       terminated, not (terminated or horizon_completed), horizon_completed)

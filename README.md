@@ -191,10 +191,12 @@ they are not selected or are the lone survivor. Death includes the final surviva
 reward, stops subsequent experience for that agent, and clears its live recurrent
 state. Returned decisions keep their graphs even after death or explicit reset.
 
-`segment.terminated` means extinction. `segment.truncated` means the collection
-budget ran out while survivors remain; extinction on the last allowed step takes
+`segment.terminated` means extinction. `segment.horizon_completed` means the
+configured survival horizon was reached with survivors. `segment.truncated` means the collection budget ran out before
+either episode ending; extinction on the last allowed step takes
 precedence. Calling `collect` again continues the same episode, step counter,
-and recurrent graph. Calling it after extinction returns an empty terminated
+and recurrent graph until the horizon. After horizon completion, reset explicitly
+to begin another episode. Calling it after extinction returns an empty terminated
 segment. Budgets must be positive integers. `collector.reset()` explicitly
 restores configured resources and appearances and clears all live agent state.
 Network weights and the Python, PyTorch, and encounter RNG streams are preserved,
@@ -235,10 +237,14 @@ for _ in range(3):
 
 `train_episode` explicitly resets the collector, collects a complete episode,
 backpropagates the survival policy loss, detaches live state, and steps the
-supplied optimizer. Initial Life plus the world's total initial Points bounds
-collection to extinction. Sampling streams continue across resets. Results report a
-scalar loss, world steps, and separate agent survival totals without retaining
-training graphs. Use an optimizer over the collector's network parameters.
+supplied optimizer. Set `survival_horizon` to a positive integer (TOML or
+`--survival-horizon`) to finish after that many world steps, or earlier extinction.
+The objective is each agent's survival reward through that horizon, with no
+bootstrap or terminal bonus. Without a horizon (the default), initial Life plus
+total initial Points bounds collection to extinction; renewable training requires
+an explicit horizon. Sampling streams continue across resets. Results report a
+scalar loss, world steps, ending flags, and separate agent survival totals
+without retaining training graphs. Use an optimizer over the collector's network parameters.
 
 `survival_policy_loss(rollout)` is also available for complete episodes collected
 from step zero. It weights every sampled message and action by its owner's
@@ -344,14 +350,21 @@ If interrupted, flushed records remain accessible but the run may be incomplete.
 ### Renewable Points
 
 `configs/renewable.toml` enables scarce renewable Points for bounded
-`RolloutCollector.collect(max_steps=...)` experiments. Each agent samples a
-lifetime-fixed probability uniformly between `point_generation_probability_min`
+`RolloutCollector.collect(max_steps=...)` experiments and finite-horizon training:
+
+```sh
+python -m self_genesis train --config configs/renewable.toml --survival-horizon 100 --output renewable.jsonl
+```
+
+Each agent samples a lifetime-fixed probability uniformly between `point_generation_probability_min`
 and `point_generation_probability_max` (inclusive bounds in [0, 1]). Equal bounds
 set a constant probability; both zero reproduce the initial-Points-only world.
-The fields also have matching CLI flags. Defaults remain zero for compatibility
-with the existing extinction-based trainer; finite-horizon training is a separate
-work item, and the trainer's initial-resource step bound does not support renewable
-experiments yet.
+The fields also have matching CLI flags. Defaults remain zero for compatibility.
+Horizon completion sets `horizon_completed=true`, `terminated=false`, and
+`truncated=false` in the rollout and summary. Death on the horizon takes
+precedence. Survivors retain their Life and are logged as censored, with no
+fabricated death; `mean_survival_time` remains null. Interrupted collections
+remain truncated and cannot be used as complete training episodes.
 
 After simultaneous GIVE, Life decay, and death resolution, every survivor draws
 0 or 1 new Point, including agents outside the Encounter and lone survivors.

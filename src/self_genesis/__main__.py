@@ -16,7 +16,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, help="New JSONL results file (required for train)")
     for name in ("num_agents", "appearance_dim", "initial_life", "initial_points",
                  "vocabulary_size", "max_message_length", "memory_dim", "affect_dim",
-                 "episodes"):
+                 "episodes", "survival_horizon"):
         parser.add_argument("--" + name.replace("_", "-"), type=int)
     parser.add_argument("--learning-rate", type=float)
     parser.add_argument("--point-generation-probability-min", type=float)

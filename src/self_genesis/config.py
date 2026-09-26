@@ -20,6 +20,7 @@ class ExperimentConfig:
     max_message_length: int = 3
     memory_dim: int = 16
     affect_dim: int = 4
+    survival_horizon: int | None = None
     episodes: int = 3
     learning_rate: float = 0.001
 
@@ -33,6 +34,9 @@ class ExperimentConfig:
             value = getattr(self, name)
             if type(value) is not int or value < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
+        if self.survival_horizon is not None and (
+                type(self.survival_horizon) is not int or self.survival_horizon < 1):
+            raise ValueError("survival_horizon must be a positive integer or None")
         for name in ("point_generation_probability_min", "point_generation_probability_max"):
             value = getattr(self, name)
             if type(value) not in (int, float) or not 0 <= value <= 1:

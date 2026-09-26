@@ -2,7 +2,7 @@
 
 Run these commands from the repository root on Linux with Python 3.12. The
 examples use one shared recurrent policy, independent agent memory/affect,
-a bounded token channel, scarce renewable Points, and survival-only REINFORCE. They do
+a bounded token channel, scarce renewable Points, and survival-only Actor-Critic. They do
 not add social rewards, identity labels, or auxiliary objectives.
 
 For the matched v0.0.4 comparison, reproduction commands, and observed policy

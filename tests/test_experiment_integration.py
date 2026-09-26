@@ -56,7 +56,6 @@ class ExperimentIntegrationTests(unittest.TestCase):
                     self.assertEqual(row['final_points'], steps[-1]['points'])
                     actions = Counter({'GIVE': 0, 'NOTHING': 0})
                     tokens = [0] * 4
-                    loss = 0.0
                     previous_life = start['life']
                     previous_points = start['points']
                     for s in steps:
@@ -67,9 +66,6 @@ class ExperimentIntegrationTests(unittest.TestCase):
                                          sum(previous_life) + spent - sum(s['rewards']))
                         previous_life, previous_points = s['life'], s['points']
                         for callback in s['callbacks']:
-                            agent = callback['agent']
-                            future = sum(t['rewards'][agent] for t in steps[s['step']:])
-                            loss -= callback['log_probability'] * future / 4
                             if callback['phase'] == 'action':
                                 actions[callback['choice']] += 1
                             else:
@@ -79,7 +75,9 @@ class ExperimentIntegrationTests(unittest.TestCase):
                             for name, dimension in [('working_memory', 16), ('affect', 4)]:
                                 self.assertEqual(len(state[name]), dimension)
                                 self.assertTrue(all(math.isfinite(v) for v in state[name]))
-                    self.assertTrue(math.isclose(loss, row['loss'], rel_tol=1e-5))
+                    # Actor-Critic arithmetic is covered in test_training; the
+                    # analysis must preserve the optimizer's recorded total loss.
+                    self.assertEqual(row['loss'], update['loss'])
                     self.assertEqual(row['action_counts'], dict(actions))
                     self.assertEqual(row['token_counts'], tokens)
                     self.assertGreater(sum(tokens), 0)

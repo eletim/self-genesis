@@ -494,9 +494,11 @@ python -m self_genesis compare --config configs/renewable.toml --device cpu \
   --output comparison.json
 ```
 
-`compare` trains one shared network per training seed for the configured number of episodes using
+`compare` separately trains Entity Memory enabled (`learned`, configured positive
+`entity_memory_dim`) and disabled (`learned-no-entity-memory`, dimension zero)
+shared networks per training seed for the configured number of episodes using
 only the existing survival objective. It then freezes the weights and evaluates
-learned, always-GIVE, always-NOTHING, and producer-oracle populations separately
+both learned conditions, always-GIVE, always-NOTHING, and producer-oracle populations separately
 for every `--evaluation-seeds` value (default: the configured seed). Each evaluation starts
 with fresh agent memory and a fresh world under identical resources, generation
 probabilities, channel limits, horizon, and seed. Fixed policies send empty
@@ -544,7 +546,7 @@ and does not go through `examples/analyze_run.py`.
 
 
 For a small comparison of both learning methods, independent training seeds, and
-both evaluation interventions (use fresh output filenames):
+all four evaluation interventions (use fresh output filenames):
 
 ```sh
 for method in actor_critic reinforce; do
@@ -552,7 +554,8 @@ for method in actor_critic reinforce; do
     --training-method "$method" --value-loss-coefficient 0.5 \
     --action-entropy-coefficient 0.01 --message-entropy-coefficient 0.01 \
     --episodes 2 --survival-horizon 100 --training-seeds 41 42 43 \
-    --evaluation-seeds 101 102 --interventions appearance-shuffle working-memory-reset \
+    --evaluation-seeds 101 102 \
+    --interventions appearance-shuffle appearance-replacement working-memory-reset entity-memory-reset \
     --output "$method-comparison.json"
 done
 ```
@@ -563,10 +566,15 @@ for the validated findings. Keep all conditions except `--training-method` match
 REINFORCE ignores the value/entropy coefficients.
 
 `--training-seeds` defaults to the configured seed. Each seed initializes and trains
-its own network with the same training budget. Evaluation seeds default to the
+each condition independently with the same training budget, optimizer settings,
+world settings and seed. Dimensions differ, so equal seeds do not imply identical
+initial weights or training trajectories. No trained weights are shared between
+conditions. Explicit `--entity-memory-dim 0` retains a disabled-only `learned` run;
+use a positive dimension (default 16) for the paired comparison. Evaluation seeds default to the
 configured seed independently of this list; choose disjoint lists for held-out
 comparisons. Interventions are optional and applied separately to the frozen
-learned policy, alongside its untreated evaluation and the three baselines.
+learned conditions, each alongside its own untreated evaluation and the three baselines.
+The total training budget is twice the per-condition budget for paired runs.
 
 - `appearance-shuffle`: before each world step, permute the original Appearance
   vectors of **all** agents using an isolated `random.Random(evaluation_seed + 3)`
@@ -576,15 +584,32 @@ learned policy, alongside its untreated evaluation and the three baselines.
   This disrupts stable perceived identity across encounters; it does not mutate
   world Appearance, resources, abilities, encounter routing, or generation RNG.
 - `working-memory-reset`: zero every agent's Working Memory before each world
-  step, retaining affect and all world state. Memory updates normally within the
+  step, retaining Entity Memory, affect and all world state. Memory updates normally within the
   encounter. Affect can still carry history, so this is not a complete removal of
-  recurrent information. Neither treatment updates weights or changes rewards.
+  recurrent information.
+- `entity-memory-reset`: clear every agent's Entity Memory before each world step,
+  preserving Working Memory, affect, weights and world state. Memory can be written
+  and retrieved normally during communication, actions and encounter completion.
+  Working Memory and affect can still carry history. On the separately trained
+  disabled condition this is a no-op.
+- `appearance-replacement`: before each world step, sample fresh independent
+  uniform `[0, 1)` vectors of the configured Appearance dimension for all agents,
+  using an isolated CPU `torch.Generator` seeded with `evaluation_seed + 4`.
+  Present the partner-indexed vector consistently through communication, actions
+  and completion, then resample next step. This uses the world's Appearance
+  distribution but does not permute existing identities. Both Appearance
+  interventions preserve all policy state, world state, and other RNG streams;
+  subsequent policy updates use the presented Appearance as the Entity Memory key.
 
-Comparison schema version 2 adds `training_runs` (seed and updates),
-`training_seeds`, treatment labels, recorded `communication_messages`,
+No intervention updates weights or changes rewards.
+
+Comparison schema version 3 records `training_runs` (seed, policy, full condition
+config and updates), `training_seeds`, treatment labels, recorded `communication_messages`,
 `intervention_semantics`, `metric_semantics`, `summaries`, and
 `intervention_effects`. The original `training` list remains available for a
-single training seed; it is null for multiple seeds. Each summary pools evaluation
+single training seed and refers to the configured `learned` condition only; it is
+null for multiple seeds. Each evaluation records its condition config, and each
+intervention effect includes its learned policy label. Each summary pools evaluation
 samples only within one training seed, policy, and intervention:
 
 - GIVE collapse is a descriptive evaluation diagnostic: a GIVE fraction at least
@@ -606,7 +631,7 @@ samples only within one training seed, policy, and intervention:
 
 `intervention_effects` reports intervention-minus-untreated differences in observed
 lifetime, censoring count, and GIVE fraction for each matched training/evaluation
-seed pair. The detailed rows and summaries support history and Communication
+seed pair and learned condition. The detailed rows and summaries support history and Communication
 comparisons. World initialization and sampling streams restart identically for
 each evaluation; changed actions can subsequently change resources, survivors,
 encounters, and generation draws. Reports contain the treatment and metric

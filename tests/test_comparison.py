@@ -98,8 +98,8 @@ class ComparisonTests(unittest.TestCase):
                 run_comparison(ExperimentConfig(num_agents=2, initial_life=3,
                                                episodes=1, survival_horizon=2),
                                Path(directory) / 'report.json', evaluation_seeds=[101, 102])
-            self.assertEqual(evaluation.call_count, 8)
-            self.assertEqual(len(snapshots), 2)
+            self.assertEqual(evaluation.call_count, 10)
+            self.assertEqual(len(snapshots), 4)
 
     def test_zero_generation_extinction_and_attempts(self):
         config = ExperimentConfig(num_agents=2, initial_life=2, initial_points=1)
@@ -156,7 +156,7 @@ class ComparisonTests(unittest.TestCase):
                                            initial_life=2, initial_points=1,
                                            episodes=1, survival_horizon=2), output)
             rows = json.loads(output.read_text())['evaluations']
-            self.assertEqual(len(rows), 4)
+            self.assertEqual(len(rows), 5)
             for row in rows:
                 self.assertEqual(row['resolved_device'], 'cuda:0')
                 self.assertEqual(row['survival_returns'], [2, 2])
@@ -222,7 +222,7 @@ class ComparisonTests(unittest.TestCase):
                 output = Path(directory) / name
                 result = subprocess.run(command + ['--output', str(output)],
                                         check=True, capture_output=True, text=True)
-                self.assertEqual(json.loads(result.stdout)['evaluations'], 8)
+                self.assertEqual(json.loads(result.stdout)['evaluations'], 10)
                 reports.append(json.loads(output.read_text()))
             self.assertEqual(*reports)
             report = reports[0]
@@ -230,11 +230,12 @@ class ComparisonTests(unittest.TestCase):
             for seed in (7, 8):
                 rows = [r for r in report['evaluations'] if r['seed'] == seed]
                 self.assertEqual([r['policy'] for r in rows],
-                                 ['learned', 'always-GIVE', 'always-NOTHING',
-                                  'producer-oracle'])
+                                 ['learned', 'learned-no-entity-memory', 'always-GIVE',
+                                  'always-NOTHING', 'producer-oracle'])
                 for row in rows:
                     self.assertEqual(row['initial'], rows[0]['initial'])
-                    self.assertEqual(row['config'], rows[0]['config'])
+                    self.assertEqual({**row['config'], 'entity_memory_dim': 0},
+                                     {**rows[0]['config'], 'entity_memory_dim': 0})
                     self.assertEqual(row['survival_returns'], [2, 2, 2])
                     self.assertEqual([(r['step'], r['agent'], r['partner'])
                                       for r in row['relationship_actions']],
@@ -288,9 +289,10 @@ class ComparisonTests(unittest.TestCase):
                     self.assertEqual(reports[0]['config']['entity_memory_dim'], dimension)
                     for evaluation in reports[0]['evaluations']:
                         events = evaluation['entity_memory_events']
-                        if evaluation['policy'] == 'learned':
+                        if evaluation['policy'].startswith('learned'):
                             self.assertEqual(len(events), 12)
-                            self.assertTrue(all(len(e['retrieved']) == dimension for e in events))
+                            expected_dim = evaluation['config']['entity_memory_dim']
+                            self.assertTrue(all(len(e['retrieved']) == expected_dim for e in events))
                         else:
                             self.assertEqual(events, [])
                     for update, recorded in zip(reports[0]['training'], updates, strict=True):

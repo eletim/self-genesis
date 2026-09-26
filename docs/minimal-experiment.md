@@ -1,9 +1,12 @@
-# Run and inspect the v0.0.5 experiment
+# Run and inspect the current experiment
 
 Run these commands from the repository root on Linux with Python 3.12. The
 examples use one shared recurrent policy, independent agent memory/affect,
 a bounded token channel, scarce renewable Points, and survival-only Actor-Critic. They do
-not add social rewards, identity labels, or auxiliary objectives.
+not add social rewards, identity labels, or auxiliary objectives. Current defaults
+also include 16-dimensional Entity Memory; set `--entity-memory-dim 0` for the
+v0.0.5 architecture. See the [v0.0.6 matched validation](entity-memory-experiment.md)
+for the current multi-seed procedure, retained evidence, and null/mixed findings.
 
 For validated v0.0.5 comparison commands, retained reports, and findings, see
 [the matched learning experiment](matched-learning-experiment.md). Actor-Critic
@@ -12,8 +15,9 @@ method exhibited the seed-level GIVE collapse diagnostic. The
 [v0.0.4 renewable experiment](renewable-experiment.md) is a historical record,
 including the earlier zero-generation control, not evidence for Actor-Critic.
 
-The renewable world, encounter timing, observations, and recurrent dimensions
-remain those of v0.0.4; only the value readout and learning objective are extended.
+The renewable world and encounter timing remain those of v0.0.4. v0.0.5 extended
+the value readout and objective; v0.0.6 adds Appearance-keyed Entity Memory and
+encounter-completion updates while retaining Working Memory and affect.
 Generation abilities remain hidden from learners. These procedures follow the
 [design principles](design-principles.md): rewards are individual survival only,
 entropy is loss regularization, and horizon survivors remain censored.
@@ -66,7 +70,8 @@ python examples/analyze_run.py /tmp/self-genesis-runs/cpu.jsonl
 
 Choose a fresh output filename on every run: existing files are rejected.
 This uses four agents, eight Appearance dimensions, four tokens, three tokens
-per message, 16 memory dimensions, four affect dimensions, and Adam at 0.001.
+per message, 16 Working Memory and 16 Entity Memory dimensions, four affect
+dimensions, and Adam at 0.001.
 Generation abilities are sampled in [0.1, 0.3]. Each of the two updates lasts
 at most 12 world steps, ending earlier at extinction. Nothing is
 saved in the repository by these run commands.

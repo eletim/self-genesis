@@ -23,6 +23,7 @@ def main() -> None:
                  "episodes", "survival_horizon"):
         parser.add_argument("--" + name.replace("_", "-"), type=int)
     parser.add_argument("--learning-rate", type=float)
+    parser.add_argument("--training-method", choices=("actor_critic", "reinforce"))
     parser.add_argument("--value-loss-coefficient", type=float)
     parser.add_argument("--action-entropy-coefficient", type=float)
     parser.add_argument("--message-entropy-coefficient", type=float)

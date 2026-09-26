@@ -23,11 +23,14 @@ class ExperimentConfig:
     survival_horizon: int | None = None
     episodes: int = 3
     learning_rate: float = 0.001
+    training_method: str = "actor_critic"
     value_loss_coefficient: float = 0.5
     action_entropy_coefficient: float = 0.01
     message_entropy_coefficient: float = 0.01
 
     def __post_init__(self) -> None:
+        if self.training_method not in ("actor_critic", "reinforce"):
+            raise ValueError("training_method must be actor_critic or reinforce")
         for name, minimum in (
             ("seed", 0), ("num_agents", 2), ("appearance_dim", 1),
             ("initial_life", 1), ("initial_points", 0),

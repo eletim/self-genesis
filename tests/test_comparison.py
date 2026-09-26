@@ -170,3 +170,48 @@ class ComparisonTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     run_comparison(config, output, evaluation_seeds=seeds)
                 self.assertFalse(output.exists())
+
+    def test_training_and_comparison_cli_use_identical_reproducible_updates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            for method in ('actor_critic', 'reinforce'):
+                with self.subTest(method=method):
+                    config = path / f'{method}.toml'
+                    config.write_text(f'training_method = "{method}"\n')
+                    command = [sys.executable, '-m', 'self_genesis']
+                    settings = ['--config', str(config), '--device', 'cpu', '--seed', '17',
+                                '--num-agents', '3', '--initial-life', '3', '--initial-points', '1',
+                                '--episodes', '2', '--survival-horizon', '2',
+                                '--value-loss-coefficient', '0.7',
+                                '--action-entropy-coefficient', '0.2',
+                                '--message-entropy-coefficient', '0.3']
+                    training = path / f'{method}.jsonl'
+                    subprocess.run(command + ['train', *settings, '--output', str(training)],
+                                   check=True, capture_output=True, text=True)
+                    updates = [json.loads(line) for line in training.read_text().splitlines()
+                               if json.loads(line)['type'] == 'training']
+                    reports = []
+                    for repeat in range(2):
+                        output = path / f'{method}-{repeat}.json'
+                        subprocess.run(command + ['compare', *settings, '--output', str(output)],
+                                       check=True, capture_output=True, text=True)
+                        reports.append(json.loads(output.read_text()))
+                    self.assertEqual(*reports)
+                    self.assertEqual(reports[0]['config']['training_method'], method)
+                    for update, recorded in zip(reports[0]['training'], updates, strict=True):
+                        self.assertEqual(update, {key: recorded[key] for key in update})
+                        self.assertEqual(update['training_method'], method)
+                        self.assertAlmostEqual(
+                            update['loss'], update['actor_loss'] + 0.7 * update['value_loss']
+                            - 0.2 * update['action_entropy'] - 0.3 * update['message_entropy'],
+                            places=5)
+                        if method == 'reinforce':
+                            self.assertEqual(update['value_loss'], 0)
+                            self.assertEqual(update['action_entropy'], 0)
+                            self.assertEqual(update['message_entropy'], 0)
+                    invalid = path / f'{method}-invalid.json'
+                    failed = subprocess.run(
+                        command + ['compare', *settings, '--training-method', 'typo',
+                                   '--output', str(invalid)], capture_output=True, text=True)
+                    self.assertEqual(failed.returncode, 2)
+                    self.assertFalse(invalid.exists())

@@ -138,7 +138,7 @@ class RolloutTests(unittest.TestCase):
             loss.backward()
             for name, parameter in collector.network.named_parameters():
                 if name.startswith((*heads, "thought", "memory_update", "affect_update",
-                                    "entity_update")):
+                                    "entity_update", "encounter_update")):
                     self.assertIsNotNone(parameter.grad, name)
                     self.assertTrue(torch.isfinite(parameter.grad).all(), name)
                     self.assertGreater(parameter.grad.abs().sum().item(), 0, name)

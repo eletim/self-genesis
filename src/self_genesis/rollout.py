@@ -65,6 +65,9 @@ class _RecordingPolicy:
     def communicate(self, observation: Observation) -> tuple[int, ...]:
         return self._record(observation, communicating=True)
 
+    def complete_encounter(self, experience) -> None:
+        self.agent.complete_encounter(experience)
+
     def act(self, observation: Observation) -> Action:
         return self._record(observation, communicating=False)
 

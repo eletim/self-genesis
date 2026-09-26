@@ -35,8 +35,8 @@ identical results across PyTorch versions.
 
 Each run prints JSON containing the effective conditions, resolved device, and
 initial agent state. The CLI remains an initialization smoke experiment.
-Shared world dynamics are available through the Python API below; encounters,
-communication, neural networks, and learning are not implemented yet.
+Shared world dynamics and encounters are available through the Python API below.
+Neural networks and learning are not implemented yet.
 
 ## Shared survival world
 
@@ -68,6 +68,44 @@ There are no GIVE, receipt, cooperation, or other social bonuses.
 Further steps return zero rewards and no new deaths. Finite initial Points
 bound how much Life can be restored, so even mutual giving cannot sustain the
 world indefinitely.
+
+## Encounter communication
+
+```python
+from self_genesis.encounter import EncounterProtocol
+
+class QuietPolicy:
+    def communicate(self, observation):
+        return ()
+
+    def act(self, observation):
+        return Action.NOTHING
+
+protocol = EncounterProtocol(world, seed=42, vocabulary_size=4, max_message_length=3)
+result = protocol.step([QuietPolicy() for _ in range(2)])
+```
+
+Provide one policy per agent in state order. Each step uniformly samples two
+living agents without replacement; their sampled order assigns first/second
+roles. The protocol owns its seeded random generator, independent of global
+random draws. First sends one message, second observes it and replies, then
+first and second choose GIVE or NOTHING in that order. Both see the other's
+message when acting; second also sees first's chosen action. GIVE automatically
+targets the encounter partner. Gifts resolve simultaneously through the shared
+world, followed by one Life decay for every living agent, including those not
+selected. Fewer than two survivors means no communication or action callbacks;
+time still advances.
+
+Policy observations contain own Life/Points, partner Life/Points, a copy of the
+partner's fixed Appearance, the first/second role, the received message, and the
+partner's action when available. They contain no agent indices or identity
+labels. Policy positions are used only to route callbacks.
+
+Messages are sequences of integer tokens in `range(vocabulary_size)`, at most
+`max_message_length` long. Empty messages are allowed, and a zero length limit
+disables token transmission. Tokens carry no predefined meaning, reward, or
+direct world effect. Invalid messages or actions raise `ValueError` before
+world state changes (policy callbacks and random sampling are not rolled back).
 
 Run the checks from the repository root:
 

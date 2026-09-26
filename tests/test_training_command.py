@@ -25,6 +25,14 @@ class TrainingCommandTests(unittest.TestCase):
         for value in (0, -1, True, '0.1', float('nan'), float('inf')):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 ExperimentConfig(learning_rate=value)
+        for name in ('value_loss_coefficient', 'action_entropy_coefficient',
+                     'message_entropy_coefficient'):
+            for value in (-1, True, '0.1', float('nan'), float('inf'), -float('inf')):
+                with self.subTest(name=name, value=value), self.assertRaises(ValueError):
+                    ExperimentConfig(**{name: value})
+        with self.assertRaises(ValueError):
+            ExperimentConfig(value_loss_coefficient=0)
+        ExperimentConfig(action_entropy_coefficient=0, message_entropy_coefficient=0)
         with self.assertRaisesRegex(ValueError, 'Unknown configuration keys'):
             load_config(typo=1)
 
@@ -36,11 +44,13 @@ class TrainingCommandTests(unittest.TestCase):
                               'initial_life = 2\ninitial_points = 0\n'
                               'vocabulary_size = 5\nmax_message_length = 2\n'
                               'memory_dim = 7\naffect_dim = 3\nepisodes = 1\n'
-                              'learning_rate = 0.02\n')
+                              'learning_rate = 0.02\nvalue_loss_coefficient = 0.7\n'
+                              'action_entropy_coefficient = 0.2\nmessage_entropy_coefficient = 0.3\n')
             command = [sys.executable, '-m', 'self_genesis', 'train',
                        '--config', str(config), '--device', 'cpu', '--seed', '42',
                        '--episodes', '2', '--max-message-length', '0',
-                       '--learning-rate', '0.005']
+                       '--learning-rate', '0.005', '--value-loss-coefficient', '0.8',
+                       '--action-entropy-coefficient', '0', '--message-entropy-coefficient', '0.04']
             outputs = []
             for name in ('first.jsonl', 'second.jsonl'):
                 output = path / name
@@ -61,6 +71,11 @@ class TrainingCommandTests(unittest.TestCase):
                         [r['episode'] for r in records if r['type'] == kind],
                         [r['episode'] for r in starts])
                 self.assertEqual(starts[0]['settings']['seed'], 42)
+                for name, expected in (('value_loss_coefficient', 0.8),
+                                       ('action_entropy_coefficient', 0),
+                                       ('message_entropy_coefficient', 0.04)):
+                    self.assertEqual(starts[0]['settings'][name], expected)
+                    self.assertEqual(summary['config'][name], expected)
                 self.assertEqual(starts[0]['policy_settings'], {
                     'appearance_dim': 2, 'vocabulary_size': 5,
                     'max_message_length': 0, 'memory_dim': 7, 'affect_dim': 3})

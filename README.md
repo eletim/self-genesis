@@ -162,9 +162,9 @@ predictions and categorical entropy for each sampled decision. The value readout
 uses the existing updated memory before sampling; message entropy sums across
 independent token slots. Rollout decisions expose these as `value` and `entropy`,
 with `None` for both on empty messages, which still update recurrent state.
-These statistics prepare Actor-Critic training; the current training loss remains
-REINFORCE. Discrete samples themselves are not differentiable. The tests
-exercise a complete episode and optimizer update using only world survival
+Actor-Critic training uses these statistics for a detached advantage baseline,
+value regression, and entropy regularization. Discrete samples themselves are not
+differentiable. The tests exercise a complete episode and optimizer update using only world survival
 rewards; this is a trainability check, not evidence of learned cooperation.
 The `train` command below exposes these updates through the CLI.
 
@@ -257,17 +257,26 @@ scalar loss, world steps, ending flags, and separate agent survival totals
 without retaining training graphs. Use an optimizer over the collector's network parameters.
 
 `survival_policy_loss(rollout)` is also available for complete episodes collected
-from step zero. It weights every sampled message and action by its owner's
-undiscounted survival reward-to-go, including subsequent steps without encounters
-and the final living step. Losses are summed over decisions and averaged over
-agents. Returns are never pooled across agents; there are no communication,
+from step zero. Every sampled message and action uses its owner's undiscounted
+survival reward-to-go, including subsequent steps without encounters and the final
+living step. The actor uses the detached advantage `return - value`; the critic
+minimizes squared error to that return. Losses are summed over decisions and
+averaged over the initial number of agents. The total loss is actor loss plus
+`value_loss_coefficient * value_loss`, minus separate action and message entropy
+bonuses. `value_loss_coefficient` defaults to 0.5 and must be positive;
+`action_entropy_coefficient` and `message_entropy_coefficient` each default to 0.01
+and must be nonnegative (zero disables the corresponding bonus). All coefficients
+must be finite and can be set in TOML or through the matching CLI flags, such as
+`--message-entropy-coefficient 0`. They are saved with the experiment settings.
+Entropy regularizes the loss without changing survival rewards. Returns are never
+pooled across agents; there are no communication,
 GIVE, cooperation, or internal-state rewards. Memory, thought, and affect learn
 through recurrent gradients from the same objective. A disabled channel has no
 message loss but retains its internal-state update.
 
 Incomplete episodes, truncated segments, and episodes without sampled decisions
 are rejected by the loss. This minimal update uses full episode graphs and has
-no value baseline or truncation bootstrap. CPU tests verify finite losses,
+no truncation bootstrap. CPU tests verify finite losses,
 per-agent credit, nonzero gradients and parameter updates, including memory and
 affect feedback; they do not establish learned cooperation or communication.
 

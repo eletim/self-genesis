@@ -1,4 +1,4 @@
-"""Complete-episode REINFORCE using only each agent's survival rewards."""
+"""Complete-episode Actor-Critic using only each agent's survival rewards."""
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -10,15 +10,20 @@ from self_genesis.experiment import resolve_device
 from self_genesis.observation import RunRecorder
 from self_genesis.policy import RecurrentPolicy
 from self_genesis.rollout import Rollout, RolloutCollector
+from self_genesis.world import Action
 
 
-def survival_policy_loss(rollout: Rollout) -> torch.Tensor:
+def survival_policy_loss(
+        rollout: Rollout, *, value_loss_coefficient: float = 0.5,
+        action_entropy_coefficient: float = 0.01,
+        message_entropy_coefficient: float = 0.01) -> torch.Tensor:
     """Sum decision losses, averaged over agents, with undiscounted returns.
 
     Each message (joint token log probability) and action receives only its
     owner's reward-to-go. Unselected and lone-survivor steps still contribute
     rewards. Recurrent graphs remain intact; discrete choices use score-function
-    gradients. No baseline, social bonus, or auxiliary state target is used.
+    gradients with detached value advantages. Values regress to survival returns;
+    separate action/message entropy bonuses regularize only the loss, not rewards.
     Require extinction or completion of the explicit finite survival objective.
     Interrupted collection is not a completed objective and cannot be trained.
     """
@@ -32,7 +37,16 @@ def survival_policy_loss(rollout: Rollout) -> torch.Tensor:
             reward_to_go += experience.reward
             for decision in experience.decisions:
                 if decision.log_prob is not None:
-                    terms.append(-decision.log_prob * reward_to_go)
+                    if decision.value is None or decision.entropy is None:
+                        raise ValueError("Sampled decisions require value and entropy")
+                    advantage = reward_to_go - decision.value
+                    entropy_coefficient = (
+                        action_entropy_coefficient if isinstance(decision.choice, Action)
+                        else message_entropy_coefficient)
+                    terms.append(
+                        -decision.log_prob * advantage.detach()
+                        + value_loss_coefficient * advantage.square()
+                        - entropy_coefficient * decision.entropy)
     if not terms:
         raise ValueError("Episode has no sampled policy decisions")
     return torch.stack(terms).sum() / len(rollout.experiences)
@@ -58,7 +72,10 @@ def train_episode(collector: RolloutCollector,
     budget = _training_budget(config)
     collector.reset()
     rollout = collector.collect(budget)
-    loss = survival_policy_loss(rollout)
+    loss = survival_policy_loss(
+        rollout, value_loss_coefficient=config.value_loss_coefficient,
+        action_entropy_coefficient=config.action_entropy_coefficient,
+        message_entropy_coefficient=config.message_entropy_coefficient)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
     collector.detach()

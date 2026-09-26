@@ -110,7 +110,29 @@ class TrainingCommandTests(unittest.TestCase):
             analyzed = subprocess.run(
                 [sys.executable, 'examples/analyze_run.py', str(output)],
                 check=True, capture_output=True, text=True)
-            self.assertEqual(len(analyzed.stdout.splitlines()), 2)
+            rows = [json.loads(line) for line in analyzed.stdout.splitlines()]
+            self.assertEqual(len(rows), 2)
+            for row in rows:
+                events = [r for r in records if r['episode'] == row['episode']]
+                start = events[0]
+                steps = [r for r in events if r['type'] == 'step']
+                actions = row['relationship_actions']
+                self.assertEqual(len(actions), sum(row['action_counts'].values()))
+                for action in actions:
+                    agent, partner = action['agent'], action['partner']
+                    earlier = [s for s in steps if s['step'] < action['step']]
+                    current = next(s for s in steps if s['step'] == action['step'])
+                    self.assertEqual(action['partner_appearance'], start['appearance'][partner])
+                    self.assertEqual(action['partner_generation_probability'],
+                                     start['point_generation_probability'][partner])
+                    self.assertEqual(action['partner_prior_generated_points'],
+                                     sum(s['generated_points'][partner] for s in earlier))
+                    self.assertEqual(action['prior']['encounters'],
+                                     sum(set(s['participants']) == {agent, partner}
+                                         for s in earlier))
+                    self.assertEqual(action['successful_aid'],
+                                     dict(donor=agent, recipient=partner)
+                                     in current['successful_transfers'])
 
     def test_renewable_training_requires_horizon_before_output(self):
         with tempfile.TemporaryDirectory() as directory:

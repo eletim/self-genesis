@@ -211,3 +211,44 @@ reset starts fresh instead. Returned records retain their graphs until released,
 so discard consumed segments to free memory. Collection never silently detaches
 at a budget boundary. Use `torch.no_grad()` for inference. The CLI remains an
 initialization smoke experiment.
+
+## Survival policy training
+
+```python
+import torch
+from self_genesis.config import ExperimentConfig
+from self_genesis.policy import RecurrentPolicy
+from self_genesis.rollout import RolloutCollector
+from self_genesis.training import train_episode
+
+config = ExperimentConfig(num_agents=4, appearance_dim=8, device="cpu")
+torch.manual_seed(config.seed)
+network = RecurrentPolicy(config.appearance_dim)
+collector = RolloutCollector(config, network)
+optimizer = torch.optim.Adam(network.parameters(), lr=0.001)
+for _ in range(3):
+    result = train_episode(collector, optimizer)
+    print(result.loss, result.survival_returns)
+```
+
+`train_episode` explicitly resets the collector, collects a complete episode,
+backpropagates the survival policy loss, detaches live state, and steps the
+supplied optimizer. Initial Life plus the world's total initial Points bounds
+collection to extinction. Each reset uses the configured seed. Results report a
+scalar loss, world steps, and separate agent survival totals without retaining
+training graphs. Use an optimizer over the collector's network parameters.
+
+`survival_policy_loss(rollout)` is also available for complete episodes collected
+from step zero. It weights every sampled message and action by its owner's
+undiscounted survival reward-to-go, including subsequent steps without encounters
+and the final living step. Losses are summed over decisions and averaged over
+agents. Returns are never pooled across agents; there are no communication,
+GIVE, cooperation, or internal-state rewards. Memory, thought, and affect learn
+through recurrent gradients from the same objective. A disabled channel has no
+message loss but retains its internal-state update.
+
+Incomplete episodes, truncated segments, and episodes without sampled decisions
+are rejected by the loss. This minimal update uses full episode graphs and has
+no value baseline or truncation bootstrap. CPU tests verify finite losses,
+per-agent credit, nonzero gradients and parameter updates, including memory and
+affect feedback; they do not establish learned cooperation or communication.

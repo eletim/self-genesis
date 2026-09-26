@@ -1,6 +1,18 @@
-# Validate the v0.0.4 renewable experiment
+# Historical v0.0.4 renewable experiment
 
-The runnable default, `configs/default.toml`, now selects generation probabilities
+This record describes v0.0.4 REINFORCE validation at commit
+[`ac50ee0`](https://github.com/eletim/self-genesis/commit/ac50ee01a6f96c93410ef6d10b254a278886a647)
+(the renewable validation change). Its numerical results, report hashes,
+three-policy report format, and test counts are historical. The commands below
+belong to that revision. On v0.0.5, the default objective is Actor-Critic and
+comparison reports also include the producer oracle and additional diagnostics;
+simply replaying these commands will not reproduce the historical report bytes.
+Use `--training-method reinforce` for a current-code legacy-objective comparison,
+or follow the [matched v0.0.5 procedure](matched-learning-experiment.md) for both
+methods and retained evidence. That experiment did not rerun the zero-generation
+control. The v0.0.4 world and survival-only reward contract remain unchanged.
+
+The historical runnable default, `configs/default.toml`, selected generation probabilities
 0.1–0.3 and a survival horizon of 100. `configs/renewable.toml` is the equivalent
 minimal preset. Both use four agents, initial Life 10, initial Points 3, and
 three updates unless overridden. No-config CLI and `ExperimentConfig()` defaults
@@ -55,7 +67,7 @@ cmp /tmp/self-genesis-renewable-comparison/zero-{1,2}.json
 Each report trains one network, then freezes it for nine evaluations: three
 policies times three seeds. The bound is 100 training updates of at most 100
 steps plus nine evaluations of at most 100 steps. Networks are trained separately
-in each resource regime. This zero-generation control uses the current code and
+in each resource regime. This historical zero-generation control used the v0.0.4 code and
 the same horizon, rather than replaying an old v0.0.3 binary or its historical
 pre-sampling-fix results. Full episode graphs are bounded by the horizon.
 

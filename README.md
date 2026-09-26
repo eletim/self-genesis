@@ -4,7 +4,33 @@
 
 [Runnable CPU and RTX 5090 experiments, analysis, and validation](docs/minimal-experiment.md)
 
-[Bounded v0.0.4 renewable comparison and observed behavior](docs/renewable-experiment.md)
+[Historical v0.0.4 renewable comparison and observed behavior](docs/renewable-experiment.md)
+
+[Validated v0.0.5 matched Actor-Critic versus REINFORCE evidence](docs/matched-learning-experiment.md)
+
+## v0.0.5 learning and evidence
+
+v0.0.5 defaults to Actor-Critic with a scalar value baseline, detached advantages,
+and separate action/message entropy controls; `--training-method reinforce`
+selects the legacy objective in the current implementation. The v0.0.4 renewable
+world, encounter order, fixed Appearance, observations, and recurrent dimensions
+remain unchanged. Generation abilities and identity labels stay out of learned
+policy inputs. As required by the [design principles](docs/design-principles.md),
+reward remains each agent's own survival only: entropy regularizes the loss,
+with no GIVE, cooperation, or communication bonuses. Finite-horizon survivors
+remain censored, with no bootstrap or terminal bonus.
+
+The [validated matched experiment](docs/matched-learning-experiment.md) used
+three training seeds, three held-out seeds, and 100 updates per training seed.
+Mean held-out lifetime averaged over training seeds was 12.3611 steps for
+Actor-Critic versus 13.3333 for REINFORCE; neither beat always-GIVE (14.4167).
+All learned seed-level GIVE summaries were mixed. Appearance shuffle and Working
+Memory reset left Actor-Critic survival and GIVE counts unchanged in this sample;
+that does not prove these inputs/states are unused. History associations and token
+usage establish neither causal reciprocity nor useful communication. These bounded
+CPU results do not establish improved survival, reduced collapse, or convergence.
+The separate [v0.0.4 record](docs/renewable-experiment.md) is historical evidence,
+including a zero-generation control that was not rerun for v0.0.5.
 
 ## Experiment foundation
 
@@ -157,18 +183,24 @@ while still updating internal state. Unselected agents retain their state.
 
 `agent.log_probs` retains differentiable log probabilities (one sum per message,
 one per action) for policy-gradient training with each agent's survival
-reward-to-go. Discrete samples themselves are not differentiable. The tests
-exercise a complete episode and optimizer update using only world survival
+reward-to-go. Matching `agent.values` and `agent.entropies` retain scalar value
+predictions and categorical entropy for each sampled decision. The value readout
+uses the existing updated memory before sampling; message entropy sums across
+independent token slots. Rollout decisions expose these as `value` and `entropy`,
+with `None` for both on empty messages, which still update recurrent state.
+Actor-Critic training uses these statistics for a detached advantage baseline,
+value regression, and entropy regularization. Discrete samples themselves are not
+differentiable. The tests exercise a complete episode and optimizer update using only world survival
 rewards; this is a trainability check, not evidence of learned cooperation.
 The `train` command below exposes these updates through the CLI.
 
 Call `agent.reset()` at episode boundaries to clear state and experience. For
 truncated backpropagation, consume the pending loss before calling
 `agent.detach()` to preserve state values while dropping their graph and clearing
-log probabilities. Reset or detach before collecting another segment after an
+all captured decision statistics. Reset or detach before collecting another segment after an
 optimizer update. Construct adapters after moving the network to its device;
-use `torch.no_grad()` for inference and clear accumulated log probabilities as
-needed. Sampling uses PyTorch's RNG (`torch.manual_seed` controls it).
+use `torch.no_grad()` for inference and `agent.clear_decisions()` to release
+accumulated statistics as needed. Sampling uses PyTorch's RNG (`torch.manual_seed` controls it).
 
 ## Bounded multi-agent rollouts
 
@@ -210,8 +242,9 @@ reproduce a run by also seeding before constructing its network.
 For survival learning, accumulate each agent's rewards backward through its
 trajectory and weight each message/action log probability by that agent's
 reward-to-go, including later steps without encounters. Join consecutive segments
-for complete episode returns, or supply an appropriate estimated future return
-at a truncation boundary; a time limit must not be treated as death. No social
+for complete episode returns from step zero through extinction or the configured
+survival horizon. Training rejects truncated rollouts and uses no truncation
+bootstrap; a collection budget boundary must not be treated as death. No social
 reward or learning objective is added by collection.
 
 Consume the pending loss before `collector.detach()` and an optimizer update.
@@ -251,17 +284,38 @@ scalar loss, world steps, ending flags, and separate agent survival totals
 without retaining training graphs. Use an optimizer over the collector's network parameters.
 
 `survival_policy_loss(rollout)` is also available for complete episodes collected
-from step zero. It weights every sampled message and action by its owner's
-undiscounted survival reward-to-go, including subsequent steps without encounters
-and the final living step. Losses are summed over decisions and averaged over
-agents. Returns are never pooled across agents; there are no communication,
+from step zero. Every sampled message and action uses its owner's undiscounted
+survival reward-to-go, including subsequent steps without encounters and the final
+living step. The actor uses the detached advantage `return - value`; the critic
+minimizes squared error to that return. Losses are summed over decisions and
+averaged over the initial number of agents. The total loss is actor loss plus
+`value_loss_coefficient * value_loss`, minus separate action and message entropy
+bonuses. `value_loss_coefficient` defaults to 0.5 and must be positive;
+`action_entropy_coefficient` and `message_entropy_coefficient` each default to 0.01
+and must be nonnegative (zero disables the corresponding bonus). All coefficients
+must be finite and can be set in TOML or through the matching CLI flags, such as
+`--message-entropy-coefficient 0`. They are saved with the experiment settings.
+Select `training_method = "actor_critic"` (the default) or `"reinforce"` in TOML,
+or use `--training-method actor_critic|reinforce` with `train` or `compare`.
+Legacy REINFORCE uses `-log_prob * survival_return`, without a value baseline,
+value regression, or entropy bonuses; the existing coefficient settings are
+validated and saved but ignored by that method. Both methods use the same network,
+environment defaults, sampling streams, and complete survival objectives.
+Training results, JSONL training records, and comparison updates include
+`training_method`, total `loss`, and the unweighted, per-agent averaged components
+`actor_loss`, `value_loss`, `action_entropy`, and `message_entropy`.
+REINFORCE records zero for the three unused components; a disabled message
+channel records zero message entropy. The configured coefficients reconstruct
+the total Actor-Critic loss from these components.
+Entropy regularizes the loss without changing survival rewards. Returns are never
+pooled across agents; there are no communication,
 GIVE, cooperation, or internal-state rewards. Memory, thought, and affect learn
 through recurrent gradients from the same objective. A disabled channel has no
 message loss but retains its internal-state update.
 
 Incomplete episodes, truncated segments, and episodes without sampled decisions
 are rejected by the loss. This minimal update uses full episode graphs and has
-no value baseline or truncation bootstrap. CPU tests verify finite losses,
+no truncation bootstrap. CPU tests verify finite losses,
 per-agent credit, nonzero gradients and parameter updates, including memory and
 affect feedback; they do not establish learned cooperation or communication.
 
@@ -341,7 +395,9 @@ All flat TOML settings can also be overridden with hyphenated CLI flags:
 `--num-agents`, `--appearance-dim`, `--initial-life`, `--initial-points`,
 `--vocabulary-size`, `--max-message-length`, `--memory-dim`, `--affect-dim`,
 `--episodes`, `--learning-rate`, `--seed`, `--device`, `--survival-horizon`,
-`--point-generation-probability-min`, and `--point-generation-probability-max`.
+`--point-generation-probability-min`, `--point-generation-probability-max`,
+`--training-method`, `--value-loss-coefficient`, `--action-entropy-coefficient`,
+and `--message-entropy-coefficient`.
 Vocabulary, memory, affect dimensions, and episode count must be positive
 integers. Message length must be a nonnegative integer; zero disables messages.
 Learning rate must be finite and positive. The runnable renewable settings are
@@ -392,7 +448,7 @@ separate seeded streams with matching CPU/CUDA resource draws. Collector resets
 restore the configured population and abilities while continuing generation,
 encounter, and policy sampling streams; recreating a collector replays the run.
 
-## Matched fixed-policy comparisons
+## Matched policy comparisons
 
 ```sh
 python -m self_genesis compare --config configs/renewable.toml --device cpu \
@@ -400,10 +456,10 @@ python -m self_genesis compare --config configs/renewable.toml --device cpu \
   --output comparison.json
 ```
 
-`compare` trains one shared network for the configured number of episodes using
+`compare` trains one shared network per training seed for the configured number of episodes using
 only the existing survival objective. It then freezes the weights and evaluates
-learned, always-GIVE, and always-NOTHING populations separately for every
-`--evaluation-seeds` value (default: the configured seed). Each evaluation starts
+learned, always-GIVE, always-NOTHING, and producer-oracle populations separately
+for every `--evaluation-seeds` value (default: the configured seed). Each evaluation starts
 with fresh agent memory and a fresh world under identical resources, generation
 probabilities, channel limits, horizon, and seed. Fixed policies send empty
 messages; GIVE is attempted on every encounter, even without Points. All policies
@@ -412,11 +468,26 @@ post-decay generation rules. Sampling streams restart for each policy; realized
 encounters and generation draws can diverge as survival populations diverge.
 Learned actions remain sampled, with no learning during evaluation.
 
+The `producer-oracle` baseline sends empty messages and attempts GIVE exactly
+when the partner's true generation probability is positive and at least the
+midpoint of the configured generation-probability range; otherwise it chooses
+NOTHING. Equality at a positive midpoint qualifies; zero-generation populations
+always choose NOTHING. Like always-GIVE, it may attempt aid without Points and
+relies on the world to enforce eligibility. The encounter protocol routes the actual
+partner's generation probability through an oracle-only observation, so duplicate
+Appearances cannot conflate abilities. This field is available only to this
+evaluation baseline. Learned observations, training inputs, and rewards receive
+no generation knowledge. This is a privileged heuristic, not an optimal policy
+or a guarantee of improved survival. Use evaluation seeds distinct from the
+training seed for held-out results, as in the example above.
+
 The new JSON output file contains training settings and update results, evaluation
 seeds, initial Appearances and generation abilities, and one result per policy and
 seed. Results include per-agent survival returns and censored lifetimes, deaths,
 final resources, action counts/fractions, successful aid counts, and the existing
-prior-relationship action rows. `relationship_metrics` groups action counts,
+prior-relationship action rows. Comparison history is keyed by the actual partner,
+including when Appearances collide or are shuffled; identity and history never
+enter learned observations. `relationship_metrics` groups action counts,
 fractions, and successful aid by unseen partners, previously received aid, and
 previously encountered partners without received aid. Only earlier steps determine
 these groups; empty groups have null fractions. Action denominators count encounter
@@ -432,3 +503,73 @@ resource regimes. Zero generation also supports omission of the horizon, running
 to extinction; renewable comparison requires an explicit horizon. Existing output
 files are never overwritten. The comparison JSON is separate from training JSONL
 and does not go through `examples/analyze_run.py`.
+
+
+For a small comparison of both learning methods, independent training seeds, and
+both evaluation interventions (use fresh output filenames):
+
+```sh
+for method in actor_critic reinforce; do
+  python -m self_genesis compare --config configs/renewable.toml --device cpu \
+    --training-method "$method" --value-loss-coefficient 0.5 \
+    --action-entropy-coefficient 0.01 --message-entropy-coefficient 0.01 \
+    --episodes 2 --survival-horizon 100 --training-seeds 41 42 43 \
+    --evaluation-seeds 101 102 --interventions appearance-shuffle working-memory-reset \
+    --output "$method-comparison.json"
+done
+```
+
+This two-update smoke run is not the recorded 100-update experiment. Use the
+[full reproduction procedure and retained reports](docs/matched-learning-experiment.md#reproduction-and-retained-evidence)
+for the validated findings. Keep all conditions except `--training-method` matched;
+REINFORCE ignores the value/entropy coefficients.
+
+`--training-seeds` defaults to the configured seed. Each seed initializes and trains
+its own network with the same training budget. Evaluation seeds default to the
+configured seed independently of this list; choose disjoint lists for held-out
+comparisons. Interventions are optional and applied separately to the frozen
+learned policy, alongside its untreated evaluation and the three baselines.
+
+- `appearance-shuffle`: before each world step, permute the original Appearance
+  vectors of **all** agents using an isolated `random.Random(evaluation_seed + 3)`
+  stream. The actual partner's index selects the presented vector. The permutation
+  stays fixed across the encounter's communication and action callbacks, then is
+  resampled. Fixed points and Appearances belonging to dead agents are allowed.
+  This disrupts stable perceived identity across encounters; it does not mutate
+  world Appearance, resources, abilities, encounter routing, or generation RNG.
+- `working-memory-reset`: zero every agent's Working Memory before each world
+  step, retaining affect and all world state. Memory updates normally within the
+  encounter. Affect can still carry history, so this is not a complete removal of
+  recurrent information. Neither treatment updates weights or changes rewards.
+
+Comparison schema version 2 adds `training_runs` (seed and updates),
+`training_seeds`, treatment labels, recorded `communication_messages`,
+`intervention_semantics`, `metric_semantics`, `summaries`, and
+`intervention_effects`. The original `training` list remains available for a
+single training seed; it is null for multiple seeds. Each summary pools evaluation
+samples only within one training seed, policy, and intervention:
+
+- GIVE collapse is a descriptive evaluation diagnostic: a GIVE fraction at least
+  0.95 is `near_always_GIVE`, at most 0.05 is `near_always_NOTHING`, otherwise
+  `mixed`. With no action callbacks it is `no_actions` and fractions are null.
+  Counts accompany fractions; this label does not establish training-time collapse.
+- Survival summaries retain death and censoring counts. `mean_observed_lifetime`
+  includes horizon-censored lifetimes; `mean_survival_time` is null if any lifetime
+  is censored. A horizon survivor is never counted as a death.
+- `prior_aid_give_difference` is the GIVE fraction for previously aided partners
+  minus that for encountered-but-unaided partners. Unseen partners are excluded,
+  and the difference is null if either group has no samples. Only earlier steps
+  enter history, even for the second action callback. This is descriptive dependence,
+  not a causal estimate; actual identity, abilities, and histories stay analysis-only.
+- Communication reports callback and nonempty-message counts, token counts, mean
+  length, and empirical token entropy in bits. Entropy is null with no tokens;
+  mean length is null with no callbacks. Empty messages are counted, including a
+  disabled channel. Fixed-length learned messages may show usage without utility.
+
+`intervention_effects` reports intervention-minus-untreated differences in observed
+lifetime, censoring count, and GIVE fraction for each matched training/evaluation
+seed pair. The detailed rows and summaries support history and Communication
+comparisons. World initialization and sampling streams restart identically for
+each evaluation; changed actions can subsequently change resources, survivors,
+encounters, and generation draws. Reports contain the treatment and metric
+semantics needed to interpret these differences, without adding policy inputs.

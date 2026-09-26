@@ -1,12 +1,48 @@
-# Run and inspect the minimal experiment
+# Run and inspect the v0.0.5 experiment
 
 Run these commands from the repository root on Linux with Python 3.12. The
 examples use one shared recurrent policy, independent agent memory/affect,
-a bounded token channel, scarce renewable Points, and survival-only REINFORCE. They do
+a bounded token channel, scarce renewable Points, and survival-only Actor-Critic. They do
 not add social rewards, identity labels, or auxiliary objectives.
 
-For the matched v0.0.4 comparison, reproduction commands, and observed policy
-behavior, see [the renewable experiment record](renewable-experiment.md).
+For validated v0.0.5 comparison commands, retained reports, and findings, see
+[the matched learning experiment](matched-learning-experiment.md). Actor-Critic
+did not improve held-out survival over REINFORCE in that bounded sample; neither
+method exhibited the seed-level GIVE collapse diagnostic. The
+[v0.0.4 renewable experiment](renewable-experiment.md) is a historical record,
+including the earlier zero-generation control, not evidence for Actor-Critic.
+
+The renewable world, encounter timing, observations, and recurrent dimensions
+remain those of v0.0.4; only the value readout and learning objective are extended.
+Generation abilities remain hidden from learners. These procedures follow the
+[design principles](design-principles.md): rewards are individual survival only,
+entropy is loss regularization, and horizon survivors remain censored.
+
+## Learning controls
+
+Both `train` and `compare` accept these flat TOML settings and CLI overrides:
+
+| TOML key | CLI flag | Default / constraint |
+| --- | --- | --- |
+| `training_method` | `--training-method` | `actor_critic` (default) or legacy `reinforce` |
+| `value_loss_coefficient` | `--value-loss-coefficient` | 0.5; finite and positive |
+| `action_entropy_coefficient` | `--action-entropy-coefficient` | 0.01; finite and nonnegative |
+| `message_entropy_coefficient` | `--message-entropy-coefficient` | 0.01; finite and nonnegative |
+
+Actor-Critic uses each decision owner's undiscounted survival return minus a
+detached value prediction, plus value regression and separate entropy terms.
+Zero disables the corresponding entropy term. REINFORCE uses survival returns
+directly and ignores all three coefficients, although they remain validated and
+recorded. With `--max-message-length 0`, communication still updates recurrent
+state but contributes no message actor/value/entropy terms. Neither method adds
+social reward, a horizon bootstrap, or a terminal bonus.
+
+Training records include `training_method`, `loss`, `actor_loss`, `value_loss`,
+`action_entropy`, and `message_entropy`. The unweighted per-agent components
+reconstruct Actor-Critic loss as actor + value coefficient × value loss − action
+coefficient × action entropy − message coefficient × message entropy. REINFORCE
+records zeros for the unused value/entropy components. Compare methods using
+held-out survival and behavior; total loss scales are not comparable.
 
 ## Small CPU run
 
@@ -23,7 +59,7 @@ python -m pip check
 mkdir -p /tmp/self-genesis-runs
 python -m self_genesis train --config configs/default.toml \
   --device cpu --seed 42 --episodes 2 --initial-life 3 --initial-points 1 \
-  --survival-horizon 12 \
+  --survival-horizon 12 --training-method actor_critic \
   --output /tmp/self-genesis-runs/cpu.jsonl
 python examples/analyze_run.py /tmp/self-genesis-runs/cpu.jsonl
 ```
@@ -65,7 +101,7 @@ PY
 mkdir -p /tmp/self-genesis-runs
 python -m self_genesis train --config configs/default.toml \
   --device cuda --seed 42 --episodes 2 --initial-life 3 --initial-points 1 \
-  --survival-horizon 12 \
+  --survival-horizon 12 --training-method actor_critic \
   --output /tmp/self-genesis-runs/rtx5090.jsonl
 python examples/analyze_run.py /tmp/self-genesis-runs/rtx5090.jsonl
 ```
@@ -80,6 +116,27 @@ episode autograd graphs and detailed JSONL state records grow with episode
 length and policy size. Python encounter dispatch and GPU-to-CPU logging can
 dominate this small workload; GPU speedup is not an acceptance criterion.
 Increase one budget at a time only after inspecting the small run.
+
+## Matched comparisons
+
+Use the [README comparison smoke run](../README.md#matched-policy-comparisons)
+for both methods with separate training seeds, held-out seeds, the three baselines
+(always-GIVE, always-NOTHING, producer oracle), and evaluation-only Appearance
+shuffle / Working Memory reset. Use the
+[100-update reproduction procedure](matched-learning-experiment.md#reproduction-and-retained-evidence)
+for the recorded v0.0.5 findings and byte comparisons against retained evidence.
+The producer oracle alone receives privileged partner ability; it is a heuristic,
+not an optimal policy. Interventions preserve world rules and rewards and never
+retrain weights; memory reset retains affect and within-encounter updates.
+
+Comparison output is schema-v2 JSON, separate from training JSONL. Inspect
+`training_runs`, `summaries`, and matched `intervention_effects` directly; do not
+pass comparison reports to `examples/analyze_run.py`. Summaries include censored
+survival, successful aid, prior-aid dependence, token usage, and seed-level GIVE
+collapse (fractions <=0.05 or >=0.95; no callbacks yields `no_actions`). These are
+descriptive diagnostics, not training objectives or proof of communication utility.
+Keep training budget, horizon, architecture, resource settings, and seed lists
+matched between methods; realized trajectories and compute can still differ.
 
 ## Analysis and verification
 

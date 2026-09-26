@@ -58,6 +58,16 @@ class EncounterProtocol:
             raise ValueError("Message tokens must be integers within vocabulary_size")
         return tuple(message)
 
+    def _observe(self, agent, partner, *, first, message=(), action=None):
+        state = self.world.state
+        return Observation(
+            life=int(state.life[agent]), points=int(state.points[agent]),
+            partner_life=int(state.life[partner]),
+            partner_points=int(state.points[partner]),
+            partner_appearance=state.appearance[partner].clone(),
+            first=first, received_message=message, partner_action=action,
+        )
+
     def step(self, policies: Sequence[Policy]) -> StepResult:
         """Run communication and decisions before advancing survival time.
 
@@ -73,24 +83,16 @@ class EncounterProtocol:
         if len(living) >= 2:
             first, second = self._random.sample(living, 2)
 
-            def observe(agent, partner, message=(), action=None):
-                return Observation(
-                    life=int(state.life[agent]), points=int(state.points[agent]),
-                    partner_life=int(state.life[partner]),
-                    partner_points=int(state.points[partner]),
-                    partner_appearance=state.appearance[partner].clone(),
-                    first=agent == first, received_message=message,
-                    partner_action=action,
-                )
-
-            message = self._message(policies[first].communicate(observe(first, second)))
+            message = self._message(policies[first].communicate(
+                self._observe(first, second, first=True)))
             reply = self._message(policies[second].communicate(
-                observe(second, first, message)))
-            first_action = policies[first].act(observe(first, second, reply))
+                self._observe(second, first, first=False, message=message)))
+            first_action = policies[first].act(
+                self._observe(first, second, first=True, message=reply))
             if not isinstance(first_action, Action):
                 raise ValueError("Policy must choose an Action")
             second_action = policies[second].act(
-                observe(second, first, message, first_action))
+                self._observe(second, first, first=False, message=message, action=first_action))
             if not isinstance(second_action, Action):
                 raise ValueError("Policy must choose an Action")
             for agent, partner, action in (

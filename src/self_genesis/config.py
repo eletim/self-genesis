@@ -23,8 +23,14 @@ class ExperimentConfig:
     survival_horizon: int | None = None
     episodes: int = 3
     learning_rate: float = 0.001
+    training_method: str = "actor_critic"
+    value_loss_coefficient: float = 0.5
+    action_entropy_coefficient: float = 0.01
+    message_entropy_coefficient: float = 0.01
 
     def __post_init__(self) -> None:
+        if self.training_method not in ("actor_critic", "reinforce"):
+            raise ValueError("training_method must be actor_critic or reinforce")
         for name, minimum in (
             ("seed", 0), ("num_agents", 2), ("appearance_dim", 1),
             ("initial_life", 1), ("initial_points", 0),
@@ -46,6 +52,13 @@ class ExperimentConfig:
         if (type(self.learning_rate) not in (int, float)
                 or not 0 < self.learning_rate < math.inf):
             raise ValueError("learning_rate must be a finite positive number")
+        for name in ("value_loss_coefficient", "action_entropy_coefficient",
+                     "message_entropy_coefficient"):
+            value = getattr(self, name)
+            if (type(value) not in (int, float) or not math.isfinite(value)
+                    or value < 0 or (name == "value_loss_coefficient" and value == 0)):
+                constraint = "positive" if name == "value_loss_coefficient" else "nonnegative"
+                raise ValueError(f"{name} must be a finite {constraint} number")
         if self.seed >= 2**63:
             raise ValueError("seed must be less than 2**63")
         if self.device not in ("cpu", "cuda", "auto"):

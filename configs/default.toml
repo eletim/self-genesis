@@ -1,0 +1,12 @@
+seed = 0
+device = "cpu"
+num_agents = 4
+appearance_dim = 8
+initial_life = 10
+initial_points = 3
+vocabulary_size = 4
+max_message_length = 3
+memory_dim = 16
+affect_dim = 4
+episodes = 3
+learning_rate = 0.001

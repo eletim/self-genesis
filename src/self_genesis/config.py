@@ -1,0 +1,49 @@
+"""Small, validated experiment conditions."""
+
+from dataclasses import dataclass, fields
+import math
+from pathlib import Path
+import tomllib
+
+
+@dataclass(frozen=True)
+class ExperimentConfig:
+    seed: int = 0
+    device: str = "cpu"
+    num_agents: int = 4
+    appearance_dim: int = 8
+    initial_life: int = 10
+    initial_points: int = 3
+    vocabulary_size: int = 4
+    max_message_length: int = 3
+    memory_dim: int = 16
+    affect_dim: int = 4
+    episodes: int = 3
+    learning_rate: float = 0.001
+
+    def __post_init__(self) -> None:
+        for name, minimum in (
+            ("seed", 0), ("num_agents", 2), ("appearance_dim", 1),
+            ("initial_life", 1), ("initial_points", 0),
+            ("vocabulary_size", 1), ("max_message_length", 0),
+            ("memory_dim", 1), ("affect_dim", 1), ("episodes", 1),
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or value < minimum:
+                raise ValueError(f"{name} must be an integer >= {minimum}")
+        if (type(self.learning_rate) not in (int, float)
+                or not 0 < self.learning_rate < math.inf):
+            raise ValueError("learning_rate must be a finite positive number")
+        if self.seed >= 2**63:
+            raise ValueError("seed must be less than 2**63")
+        if self.device not in ("cpu", "cuda", "auto"):
+            raise ValueError("device must be cpu, cuda, or auto")
+
+
+def load_config(path: Path | None = None, **overrides: object) -> ExperimentConfig:
+    values = {} if path is None else tomllib.loads(path.read_text())
+    values.update({key: value for key, value in overrides.items() if value is not None})
+    unknown = values.keys() - {field.name for field in fields(ExperimentConfig)}
+    if unknown:
+        raise ValueError(f"Unknown configuration keys: {', '.join(sorted(unknown))}")
+    return ExperimentConfig(**values)

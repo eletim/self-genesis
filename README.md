@@ -2,6 +2,8 @@
 
 [Canonical design principles](docs/design-principles.md)
 
+[Runnable CPU and RTX 5090 experiments, analysis, and validation](docs/minimal-experiment.md)
+
 ## Experiment foundation
 
 Requires Python 3.11+ and PyTorch. Create a virtual environment and install:

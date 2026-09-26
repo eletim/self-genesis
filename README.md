@@ -157,7 +157,13 @@ while still updating internal state. Unselected agents retain their state.
 
 `agent.log_probs` retains differentiable log probabilities (one sum per message,
 one per action) for policy-gradient training with each agent's survival
-reward-to-go. Discrete samples themselves are not differentiable. The tests
+reward-to-go. Matching `agent.values` and `agent.entropies` retain scalar value
+predictions and categorical entropy for each sampled decision. The value readout
+uses the existing updated memory before sampling; message entropy sums across
+independent token slots. Rollout decisions expose these as `value` and `entropy`,
+with `None` for both on empty messages, which still update recurrent state.
+These statistics prepare Actor-Critic training; the current training loss remains
+REINFORCE. Discrete samples themselves are not differentiable. The tests
 exercise a complete episode and optimizer update using only world survival
 rewards; this is a trainability check, not evidence of learned cooperation.
 The `train` command below exposes these updates through the CLI.
@@ -165,10 +171,10 @@ The `train` command below exposes these updates through the CLI.
 Call `agent.reset()` at episode boundaries to clear state and experience. For
 truncated backpropagation, consume the pending loss before calling
 `agent.detach()` to preserve state values while dropping their graph and clearing
-log probabilities. Reset or detach before collecting another segment after an
+all captured decision statistics. Reset or detach before collecting another segment after an
 optimizer update. Construct adapters after moving the network to its device;
-use `torch.no_grad()` for inference and clear accumulated log probabilities as
-needed. Sampling uses PyTorch's RNG (`torch.manual_seed` controls it).
+use `torch.no_grad()` for inference and `agent.clear_decisions()` to release
+accumulated statistics as needed. Sampling uses PyTorch's RNG (`torch.manual_seed` controls it).
 
 ## Bounded multi-agent rollouts
 

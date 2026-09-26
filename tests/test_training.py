@@ -55,6 +55,9 @@ class TrainingTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(loss))
         loss.backward()
         for name, parameter in collector.network.named_parameters():
+            if name.startswith("value_head"):
+                self.assertIsNone(parameter.grad)
+                continue
             self.assertIsNotNone(parameter.grad, name)
             self.assertTrue(torch.isfinite(parameter.grad).all(), name)
             self.assertGreater(parameter.grad.abs().sum().item(), 0, name)
@@ -73,6 +76,9 @@ class TrainingTests(unittest.TestCase):
                 self.assertEqual(result.steps, 3)
                 self.assertEqual(result.survival_returns, (3, 3))
                 for name, parameter in collector.network.named_parameters():
+                    if name.startswith("value_head"):
+                        self.assertIsNone(parameter.grad)
+                        continue
                     if length == 0 and name.startswith("message_head"):
                         self.assertIsNone(parameter.grad)
                         self.assertTrue(torch.equal(parameter, before[name]))
@@ -143,6 +149,9 @@ class TrainingTests(unittest.TestCase):
             self.assertTrue(math.isfinite(result.loss))
             self.assertFalse(torch.equal(before, collector.network.action_head.weight))
             for name, parameter in collector.network.named_parameters():
+                if name.startswith("value_head"):
+                    self.assertIsNone(parameter.grad)
+                    continue
                 self.assertTrue(torch.isfinite(parameter.grad).all(), name)
                 self.assertGreater(parameter.grad.abs().sum().item(), 0, name)
             for agent in collector.agents:

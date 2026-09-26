@@ -50,6 +50,7 @@ class RecurrentPolicy(nn.Module):
         self.affect_update = nn.Linear(input_dim + 2 * memory_dim, affect_dim)
         self.message_head = nn.Linear(memory_dim, vocabulary_size)
         self.action_head = nn.Linear(memory_dim, 2)
+        self.value_head = nn.Linear(memory_dim, 1)
 
     def initial_state(self) -> PolicyState:
         parameter = next(self.parameters())
@@ -96,7 +97,7 @@ class AgentPolicy:
     """One adapter per agent; multiple adapters may reference the same network.
 
     Samples fixed-length messages and actions, retaining differentiable log
-    probabilities for an external policy-gradient loss. Reset at episode
+    probabilities, values and entropies for external training losses. Reset at episode
     boundaries; detach between truncated training segments/optimizer updates.
     Move the network to its device before constructing adapters.
     """
@@ -108,23 +109,37 @@ class AgentPolicy:
     def reset(self) -> None:
         self.state = self.network.initial_state()
         self.log_probs: list[torch.Tensor] = []
+        self.values: list[torch.Tensor] = []
+        self.entropies: list[torch.Tensor] = []
 
     def detach(self) -> None:
         self.state = PolicyState(self.state.memory.detach(), self.state.affect.detach())
+        self.clear_decisions()
+
+    def clear_decisions(self) -> None:
+        """Release captured statistics without changing recurrent state."""
         self.log_probs.clear()
+        self.values.clear()
+        self.entropies.clear()
 
     def communicate(self, observation: Observation) -> tuple[int, ...]:
         logits, self.state = self.network(observation, self.state, communicating=True)
         if self.network.max_message_length == 0:
             return ()
         distribution = Categorical(logits=logits)
+        value = self.network.value_head(self.state.memory).squeeze(-1)
         tokens = distribution.sample((self.network.max_message_length,))
         self.log_probs.append(distribution.log_prob(tokens).sum())
+        self.values.append(value)
+        self.entropies.append(distribution.entropy() * self.network.max_message_length)
         return tuple(tokens.tolist())
 
     def act(self, observation: Observation) -> Action:
         logits, self.state = self.network(observation, self.state, communicating=False)
         distribution = Categorical(logits=logits)
+        value = self.network.value_head(self.state.memory).squeeze(-1)
         action = distribution.sample()
         self.log_probs.append(distribution.log_prob(action))
+        self.values.append(value)
+        self.entropies.append(distribution.entropy())
         return (Action.NOTHING, Action.GIVE)[action.item()]

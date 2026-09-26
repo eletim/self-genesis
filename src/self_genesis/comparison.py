@@ -1,6 +1,6 @@
 """Matched evaluations of learned, fixed, and oracle policies using shared world rules."""
 
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 import json
 from pathlib import Path
 
@@ -8,7 +8,7 @@ import torch
 
 from self_genesis.analysis import RelationshipAnalysis
 from self_genesis.config import ExperimentConfig
-from self_genesis.encounter import EncounterProtocol
+from self_genesis.encounter import EncounterProtocol, Observation
 from self_genesis.experiment import resolve_device
 from self_genesis.policy import AgentPolicy, RecurrentPolicy
 from self_genesis.rollout import RolloutCollector
@@ -29,17 +29,30 @@ class FixedPolicy:
         return self.action
 
 
+@dataclass(frozen=True)
+class _ProducerObservation(Observation):
+    partner_generation_probability: float
+
+
+class _ProducerOracleProtocol(EncounterProtocol):
+    """Route privileged ability only during oracle evaluation, by partner index."""
+
+    def _observe(self, agent, partner, **kwargs):
+        observation = super()._observe(agent, partner, **kwargs)
+        return _ProducerObservation(
+            **vars(observation),
+            partner_generation_probability=float(
+                self.world.state.point_generation_probability[partner]))
+
+
 class ProducerOracle:
     """Evaluation-only aid to positive producers at or above the range midpoint.
 
-    The privileged Appearance-to-ability lookup belongs only to this baseline,
-    never to observations, the learned network, or its training collector.
+    Privileged partner ability arrives only through oracle observations, never
+    through learned observations, the network, or its training collector.
     """
 
     def __init__(self, world: World, config: ExperimentConfig):
-        self.probabilities = dict(zip(
-            map(tuple, world.state.appearance.tolist()),
-            world.state.point_generation_probability.tolist(), strict=True))
         midpoint = (config.point_generation_probability_min
                     + config.point_generation_probability_max) / 2
         self.threshold = world.state.point_generation_probability.new_tensor(midpoint).item()
@@ -48,7 +61,7 @@ class ProducerOracle:
         return ()
 
     def act(self, observation):
-        probability = self.probabilities[tuple(observation.partner_appearance.tolist())]
+        probability = observation.partner_generation_probability
         return (Action.GIVE if probability > 0 and probability >= self.threshold
                 else Action.NOTHING)
 
@@ -93,9 +106,10 @@ def evaluate_policy(config: ExperimentConfig,
     """Fresh world and policy state for one seed; never update learned weights."""
     budget = _budget(config)
     world = World(config)
-    protocol = EncounterProtocol(world, seed=config.seed,
-                                 vocabulary_size=config.vocabulary_size,
-                                 max_message_length=config.max_message_length)
+    protocol_type = _ProducerOracleProtocol if network is ProducerOracle else EncounterProtocol
+    protocol = protocol_type(world, seed=config.seed,
+                             vocabulary_size=config.vocabulary_size,
+                             max_message_length=config.max_message_length)
     policies = [(ProducerOracle(world, config) if network is ProducerOracle else
                  FixedPolicy(network) if isinstance(network, Action) else AgentPolicy(network))
                 for _ in range(config.num_agents)]

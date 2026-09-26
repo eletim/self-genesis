@@ -444,8 +444,9 @@ when the partner's true generation probability is positive and at least the
 midpoint of the configured generation-probability range; otherwise it chooses
 NOTHING. Equality at a positive midpoint qualifies; zero-generation populations
 always choose NOTHING. Like always-GIVE, it may attempt aid without Points and
-relies on the world to enforce eligibility. Its private lookup associates the
-initial Appearances with true generation probabilities, available only to this
+relies on the world to enforce eligibility. The encounter protocol routes the actual
+partner's generation probability through an oracle-only observation, so duplicate
+Appearances cannot conflate abilities. This field is available only to this
 evaluation baseline. Learned observations, training inputs, and rewards receive
 no generation knowledge. This is a privileged heuristic, not an optimal policy
 or a guarantee of improved survival. Use evaluation seeds distinct from the

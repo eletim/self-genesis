@@ -11,7 +11,8 @@ from unittest.mock import patch
 
 import torch
 
-from self_genesis.comparison import ProducerOracle, evaluate_policy, run_comparison
+from self_genesis.comparison import (ProducerOracle, _ProducerObservation,
+                                     evaluate_policy, run_comparison)
 from self_genesis.config import ExperimentConfig
 from self_genesis.encounter import EncounterProtocol, Observation
 from self_genesis.policy import RecurrentPolicy
@@ -28,13 +29,30 @@ class ComparisonTests(unittest.TestCase):
         for i, expected in enumerate((Action.NOTHING, Action.NOTHING,
                                       Action.GIVE, Action.GIVE)):
             for points in (0, 1):
-                observation = Observation(2, points, 2, 0, world.state.appearance[i],
-                                          True, (), None)
+                observation = _ProducerObservation(
+                    2, points, 2, 0, world.state.appearance[i], True, (), None,
+                    float(world.state.point_generation_probability[i]))
                 self.assertEqual(oracle.communicate(observation), ())
                 self.assertIs(oracle.act(observation), expected)
         self.assertEqual({field.name for field in fields(Observation)}, {
             'life', 'points', 'partner_life', 'partner_points', 'partner_appearance',
             'first', 'received_message', 'partner_action'})
+
+    def test_oracle_distinguishes_partners_with_duplicate_appearances(self):
+        config = ExperimentConfig(num_agents=4, initial_life=10, initial_points=5,
+                                  point_generation_probability_max=1, survival_horizon=5)
+        world = World(config)
+        world.state.appearance.zero_()
+        world.state.point_generation_probability[:] = torch.tensor([0.0, 1.0, 0.0, 1.0])
+        with patch('self_genesis.comparison.World', return_value=world):
+            report = evaluate_policy(config, ProducerOracle)
+        actions = report['relationship_actions']
+        self.assertEqual(len(actions), 10)
+        self.assertEqual({row['action'] for row in actions}, {'GIVE', 'NOTHING'})
+        for row in actions:
+            expected = 'GIVE' if row['partner'] in (1, 3) else 'NOTHING'
+            self.assertEqual(row['action'], expected)
+            self.assertEqual(row['successful_aid'], expected == 'GIVE')
 
     def test_oracle_uses_shared_transfer_decay_and_generation_rules(self):
         config = ExperimentConfig(num_agents=2, initial_life=2, initial_points=1,
@@ -152,6 +170,8 @@ class ComparisonTests(unittest.TestCase):
                         survival_horizon=5, max_message_length=length)
                     network = RecurrentPolicy(
                         config.appearance_dim, max_message_length=length).to(device)
+                    network.register_forward_pre_hook(
+                        lambda module, args: self.assertIs(type(args[0]), Observation))
                     agents = []
                     original_step = EncounterProtocol.step
 

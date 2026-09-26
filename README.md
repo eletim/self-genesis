@@ -36,7 +36,7 @@ identical results across PyTorch versions.
 Each run prints JSON containing the effective conditions, resolved device, and
 initial agent state. The CLI remains an initialization smoke experiment.
 Shared world dynamics and encounters are available through the Python API below.
-Neural networks and learning are not implemented yet.
+A trainable recurrent policy is available through the Python API below.
 
 ## Shared survival world
 
@@ -116,3 +116,50 @@ python -m compileall -q src tests
 
 CUDA initialization and world steps are tested when CUDA is available; device
 selection and the unavailable-CUDA error path are also tested on CPU hosts.
+
+
+## Recurrent agent policy
+
+```python
+from self_genesis.policy import AgentPolicy, RecurrentPolicy
+
+world = World(ExperimentConfig(num_agents=2))
+network = RecurrentPolicy(world.state.appearance.shape[1]).to(world.state.life.device)
+agents = [AgentPolicy(network) for _ in range(2)]
+protocol = EncounterProtocol(world, seed=42)
+result = protocol.step(agents)
+```
+
+Use a distinct `AgentPolicy` for each agent. Adapters may share a network, but
+own separate Working Memory, affect tensors, and sampled-decision log
+probabilities. The network itself holds only weights. Its `forward` method
+also accepts and returns explicit `PolicyState` tensors for inspection.
+
+Each communication or action callback encodes resources, partner Appearance,
+role, received message positions, available partner action, and callback phase.
+A thought layer consumes this observation plus previous memory and affect;
+a GRU updates memory using thought and previous affect. New affect is generated
+from the observation, thought, and updated memory, then feeds the next callback.
+Affect dimensions have no predefined meanings or supervised targets. No agent
+indices, self labels, or auxiliary classification objectives are added.
+
+The communication head samples independent tokens from one categorical
+distribution for a fixed-length message; the action head samples GIVE or
+NOTHING. Match the network's `vocabulary_size` and `max_message_length` to the
+encounter protocol (defaults match). A zero message length disables transmission
+while still updating internal state. Unselected agents retain their state.
+
+`agent.log_probs` retains differentiable log probabilities (one sum per message,
+one per action) for policy-gradient training with each agent's survival
+reward-to-go. Discrete samples themselves are not differentiable. The tests
+exercise a complete episode and optimizer update using only world survival
+rewards; this is a trainability check, not evidence of learned cooperation.
+The CLI remains an initialization smoke experiment, not a training runner.
+
+Call `agent.reset()` at episode boundaries to clear state and experience. For
+truncated backpropagation, consume the pending loss before calling
+`agent.detach()` to preserve state values while dropping their graph and clearing
+log probabilities. Reset or detach before collecting another segment after an
+optimizer update. Construct adapters after moving the network to its device;
+use `torch.no_grad()` for inference and clear accumulated log probabilities as
+needed. Sampling uses PyTorch's RNG (`torch.manual_seed` controls it).

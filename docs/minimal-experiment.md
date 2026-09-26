@@ -81,8 +81,34 @@ Increase one budget at a time only after inspecting the small run.
 files, schema version 1. It prints one JSON row per update with loss, individual
 survival returns, mean survival, deaths, action counts/ratios, token counts, and
 final resources. It rejects unfinished training runs; it is not an analyzer for
-arbitrary truncated API rollouts. It streams raw records and retains only the
-small per-episode output rows before printing.
+arbitrary truncated API rollouts. It streams raw records and retains the
+per-episode output, including action analysis rows, before printing.
+
+Each update also includes `relationship_actions`, one row per sampled action.
+Rows link the current `action` (GIVE/NOTHING) and `successful_aid` to the actor's
+and partner's generation probabilities and cumulative `*_prior_generated_points`.
+The `prior` object counts encounters, received GIVE attempts, received NOTHING,
+received successful aid, outgoing GIVE attempts, and outgoing successful aid.
+Histories are directed, keyed by observer and exact partner Appearance, and reset
+each episode. Identical Appearances are consequently indistinguishable in these
+histories; agent/partner indices remain available as logging references.
+Both actions use only earlier steps: the current partner action, successful
+transfers, and newly generated Points enter history after both rows are emitted.
+Non-increasing step numbers are rejected.
+
+For temporal comparisons, group rows by `prior.encounters == 0` (unseen) versus
+`> 0` (repeated), or compare subsequent GIVE fractions for rows with
+`prior.received_give_attempts > 0` against rows with prior encounters but no
+received GIVE attempts. `prior.received_nothing` also identifies explicit past
+non-GIVE, including partners with mixed histories. Compare `prior.received_aid`
+separately to distinguish successful help from attempts, and
+`prior.outgoing_give_attempts`/`prior.outgoing_aid` for previous outgoing help.
+Generation probabilities and prior generation totals support trait/history
+comparisons without leaking the current generation outcome into a predictor.
+These are descriptive associations, not evidence of causal reciprocity or policy
+access to hidden generation traits. For older schema-1 logs lacking generation
+or transfer records, unavailable values are `null`, not assumed zero/successful;
+attempt and encounter histories remain available.
 
 For deeper inspection, load each line with `json.loads`. `step.participants`
 links encounter order to agent logging indices; `callbacks` holds ordered
@@ -92,7 +118,7 @@ contains initial Appearance and effective settings. Agent indices are analysis
 keys only, never policy inputs. Each `summary` is cumulative: do not sum repeated
 summaries from continued API collection. Surviving lifetimes at truncation are
 censored, not completed deaths. GIVE counts are attempts, including attempts
-without Points; inspect resource changes to identify actual transfers.
+without Points; `successful_transfers` identifies actual directed aid.
 
 ```sh
 python -m unittest discover -s tests -p 'test_experiment_integration.py' -v

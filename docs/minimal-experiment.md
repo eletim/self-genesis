@@ -113,6 +113,9 @@ semantics, or self-representation.
 
 ## Validation record
 
+The following historical results predate the fix that preserves sampling streams
+across episode resets. Exact trajectories and losses change with that fix.
+
 On 2026-09-26, Linux x86_64, Python 3.12.14, NumPy 2.2.6:
 
 - PyTorch 2.7.1+cpu: all 44 tests completed successfully (four CUDA tests skipped).

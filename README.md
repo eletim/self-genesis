@@ -196,9 +196,10 @@ budget ran out while survivors remain; extinction on the last allowed step takes
 precedence. Calling `collect` again continues the same episode, step counter,
 and recurrent graph. Calling it after extinction returns an empty terminated
 segment. Budgets must be positive integers. `collector.reset()` explicitly
-restores the configured world and seed and clears all live agent state; it does
-not change network weights. Like world initialization, reset reseeds PyTorch's
-global sampler, so identical weights reproduce the configured episode.
+restores configured resources and appearances and clears all live agent state.
+Network weights and the Python, PyTorch, and encounter RNG streams are preserved,
+so subsequent episodes draw fresh samples. Collector construction seeds sampling;
+reproduce a run by also seeding before constructing its network.
 
 For survival learning, accumulate each agent's rewards backward through its
 trajectory and weight each message/action log probability by that agent's
@@ -235,7 +236,7 @@ for _ in range(3):
 `train_episode` explicitly resets the collector, collects a complete episode,
 backpropagates the survival policy loss, detaches live state, and steps the
 supplied optimizer. Initial Life plus the world's total initial Points bounds
-collection to extinction. Each reset uses the configured seed. Results report a
+collection to extinction. Sampling streams continue across resets. Results report a
 scalar loss, world steps, and separate agent survival totals without retaining
 training graphs. Use an optimizer over the collector's network parameters.
 
@@ -324,10 +325,10 @@ integers. Message length must be a nonnegative integer; zero disables messages.
 Learning rate must be finite and positive. Defaults are listed in the sample
 configuration. The objective remains undiscounted per-agent survival return.
 
-Training seeds network initialization before moving weights to CPU/CUDA and reuses the
-existing seeded episode reset behavior. Repeat runs on the same device and
-software are reproducible subject to PyTorch backend determinism; CPU and CUDA
-training need not match.
+Training seeds network initialization before moving weights to CPU/CUDA and seeds
+collection once, preserving sampling streams across episode resets. Repeat runs
+on the same device and software are reproducible subject to PyTorch backend
+determinism; CPU and CUDA training need not match.
 
 `--output` is required for training and must name a new file in an existing
 directory. Existing results are never overwritten. Stdout reports JSON with the

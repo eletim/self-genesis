@@ -25,10 +25,12 @@ def resolve_device(requested: str) -> torch.device:
     return torch.device(requested)
 
 
-def initialize(config: ExperimentConfig) -> ExperimentState:
+def initialize(config: ExperimentConfig, *, seed_rng: bool = True) -> ExperimentState:
+    """Create configured state, optionally seeding global sampling streams."""
     device = resolve_device(config.device)
-    random.seed(config.seed)
-    torch.manual_seed(config.seed)
+    if seed_rng:
+        random.seed(config.seed)
+        torch.manual_seed(config.seed)
     # Generate on CPU so initial appearances match across CPU and CUDA runs.
     generator = torch.Generator(device="cpu").manual_seed(config.seed)
     appearance = torch.rand(

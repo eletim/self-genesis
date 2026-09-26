@@ -1,3 +1,4 @@
+import random
 import unittest
 
 import torch
@@ -103,16 +104,47 @@ class RolloutTests(unittest.TestCase):
             self.assertIsNotNone(action.log_prob.grad_fn)
         collector.collect(1)
 
-    def test_reset_reproduces_episode_and_validates_budget(self):
-        collector = self.collector(num_agents=2, initial_life=2, initial_points=0)
-        first = collector.collect(10)
-        appearances = collector.world.state.appearance.clone()
-        collector.reset()
-        self.assertTrue(torch.equal(appearances, collector.world.state.appearance))
-        second = collector.collect(10)
-        for left, right in zip(first.experiences, second.experiences):
-            self.assertEqual([[d.choice for d in x.decisions] for x in left],
-                             [[d.choice for d in x.decisions] for x in right])
+    def test_reset_preserves_rng_streams_and_reproduces_runs(self):
+        def run():
+            torch.manual_seed(17)
+            collector = self.collector(num_agents=6, initial_life=8,
+                                       initial_points=0, device="cpu")
+            appearances = collector.world.state.appearance.clone()
+            episodes = []
+            for _ in range(3):
+                rollout = collector.collect(8)
+                episodes.append(tuple(
+                    tuple((item.step, tuple((d.observation.first, d.choice)
+                                           for d in item.decisions))
+                          for item in experiences)
+                    for experiences in rollout.experiences))
+                random.random()
+                python_rng = random.getstate()
+                torch_rng = torch.get_rng_state().clone()
+                cuda_rng = torch.cuda.get_rng_state_all()
+                encounter_rng = collector.protocol._random.getstate()
+                collector.reset()
+                self.assertEqual(random.getstate(), python_rng)
+                self.assertTrue(torch.equal(torch.get_rng_state(), torch_rng))
+                for before, after in zip(cuda_rng, torch.cuda.get_rng_state_all()):
+                    self.assertTrue(torch.equal(before, after))
+                self.assertEqual(collector.protocol._random.getstate(), encounter_rng)
+                self.assertTrue(torch.equal(appearances, collector.world.state.appearance))
+                self.assertTrue((collector.world.state.life == 8).all())
+                self.assertTrue((collector.world.state.points == 0).all())
+                self.assertEqual(collector.elapsed_steps, 0)
+                for agent in collector.agents:
+                    self.assertEqual(agent.state.memory.count_nonzero(), 0)
+                    self.assertEqual(agent.state.affect.count_nonzero(), 0)
+                    self.assertFalse(agent.log_probs)
+            self.assertNotEqual(episodes[0], episodes[1])
+            self.assertNotEqual(episodes[1], episodes[2])
+            return episodes
+
+        self.assertEqual(run(), run())
+
+    def test_validates_budget_and_dimensions(self):
+        collector = self.collector()
         for budget in (0, -1, True, 1.5):
             with self.assertRaises(ValueError):
                 collector.collect(budget)

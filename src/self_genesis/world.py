@@ -38,8 +38,8 @@ class World:
     final time step. Summed rewards therefore measure time lived.
     """
 
-    def __init__(self, config: ExperimentConfig):
-        self.state = initialize(config)
+    def __init__(self, config: ExperimentConfig, *, seed_rng: bool = True):
+        self.state = initialize(config, seed_rng=seed_rng)
 
     @property
     def alive(self) -> torch.Tensor:

@@ -48,8 +48,8 @@ def train_episode(collector: RolloutCollector,
                   optimizer: torch.optim.Optimizer) -> TrainingResult:
     """Reset, collect to extinction, and update the collector's shared network.
 
-    Pass an optimizer for collector.network. Reset uses the configured seed,
-    as in RolloutCollector.reset. Results contain no retained autograd graph.
+    Pass an optimizer for collector.network. Reset preserves sampling streams
+    across episodes. Results contain no retained autograd graph.
     """
     collector.reset()
     # No agent can outlive its initial Life plus every Point in the world.

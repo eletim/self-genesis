@@ -79,15 +79,19 @@ class RolloutCollector:
         self.config = config
         self.network = network
         self.agents = tuple(AgentPolicy(network) for _ in range(config.num_agents))
-        self.reset()
-
-    def reset(self) -> None:
-        """Restore configured resources, seed and appearances, and fresh state."""
         self.world = World(self.config)
         self.protocol = EncounterProtocol(
             self.world, seed=self.config.seed,
             vocabulary_size=self.network.vocabulary_size,
             max_message_length=self.network.max_message_length)
+        self.elapsed_steps = 0
+        if self.recorder is not None:
+            self.recorder.start_episode(self)
+
+    def reset(self) -> None:
+        """Restore the world and agent state while preserving sampling streams."""
+        self.world = World(self.config, seed_rng=False)
+        self.protocol.world = self.world
         self.elapsed_steps = 0
         for agent in self.agents:
             agent.reset()

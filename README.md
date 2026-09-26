@@ -4,6 +4,8 @@
 
 [Runnable CPU and RTX 5090 experiments, analysis, and validation](docs/minimal-experiment.md)
 
+[Bounded v0.0.4 renewable comparison and observed behavior](docs/renewable-experiment.md)
+
 ## Experiment foundation
 
 Requires Python 3.11+ and PyTorch. Create a virtual environment and install:
@@ -22,9 +24,11 @@ CUDA execution requires a CUDA-capable PyTorch installation and compatible GPU.
 
 Edit [configs/default.toml](configs/default.toml) to configure the seed, device,
 number of agents (at least two), appearance dimension, initial Life, and initial
-Point budget. Life and appearance dimension must be positive integers; Points
-may be zero. Seeds are integers from 0 through `2**63 - 1`. Without `--config`,
-the same defaults are used. `--seed` and `--device` override file settings.
+Point budget, renewable generation bounds, and survival horizon. Life and
+appearance dimension must be positive integers; Points may be zero. Seeds are integers from 0 through `2**63 - 1`. Without `--config`,
+the API defaults retain zero generation and no horizon for compatibility. The
+sample default file uses generation probabilities 0.1–0.3 and horizon 100.
+`--seed` and `--device` override file settings.
 Unknown configuration keys and invalid values fail with an error.
 
 Device choices are `cpu` (default), `cuda` (fails if unavailable), and `auto`
@@ -61,15 +65,15 @@ Life reaching zero means permanent death. Dead agents cannot act or receive
 Life. A GIVE involving a dead agent or a donor without Points does nothing and
 costs nothing. Self-directed and invalid targets, malformed decisions, and
 incorrect decision counts raise `ValueError` before changing the world.
-Points never regenerate or transfer to recipients, and Appearance never changes.
+Points never transfer to recipients, and Appearance never changes. With positive
+generation probabilities, survivors may generate a Point after decay (see below).
 
 `StepResult.reward` gives each agent alive at the start of the step one reward,
 including its final step: accumulated reward is its lifetime in world steps.
 There are no GIVE, receipt, cooperation, or other social bonuses.
 `StepResult.died` marks new deaths, and `done` becomes true when everyone is dead.
-Further steps return zero rewards and no new deaths. Finite initial Points
-bound how much Life can be restored, so even mutual giving cannot sustain the
-world indefinitely.
+Further steps return zero rewards and no new deaths. With zero generation, finite
+initial Points bound restored Life; renewable training instead requires a finite horizon.
 
 ## Encounter communication
 
@@ -240,7 +244,7 @@ backpropagates the survival policy loss, detaches live state, and steps the
 supplied optimizer. Set `survival_horizon` to a positive integer (TOML or
 `--survival-horizon`) to finish after that many world steps, or earlier extinction.
 The objective is each agent's survival reward through that horizon, with no
-bootstrap or terminal bonus. Without a horizon (the default), initial Life plus
+bootstrap or terminal bonus. Without a horizon (the API default), initial Life plus
 total initial Points bounds collection to extinction; renewable training requires
 an explicit horizon. Sampling streams continue across resets. Results report a
 scalar loss, world steps, ending flags, and separate agent survival totals
@@ -336,12 +340,13 @@ keep resource budgets small for exploratory runs.
 All flat TOML settings can also be overridden with hyphenated CLI flags:
 `--num-agents`, `--appearance-dim`, `--initial-life`, `--initial-points`,
 `--vocabulary-size`, `--max-message-length`, `--memory-dim`, `--affect-dim`,
-`--episodes`, `--learning-rate`, `--seed`, `--device`,
+`--episodes`, `--learning-rate`, `--seed`, `--device`, `--survival-horizon`,
 `--point-generation-probability-min`, and `--point-generation-probability-max`.
 Vocabulary, memory, affect dimensions, and episode count must be positive
 integers. Message length must be a nonnegative integer; zero disables messages.
-Learning rate must be finite and positive. Defaults are listed in the sample
-configuration. The objective remains undiscounted per-agent survival return.
+Learning rate must be finite and positive. The runnable renewable settings are
+listed in the sample configuration; API defaults keep zero generation and no
+horizon. The objective remains undiscounted per-agent survival return.
 
 Training seeds network initialization before moving weights to CPU/CUDA and seeds
 collection once, preserving sampling streams across episode resets. Repeat runs
@@ -370,7 +375,8 @@ python -m self_genesis train --config configs/renewable.toml --survival-horizon 
 Each agent samples a lifetime-fixed probability uniformly between `point_generation_probability_min`
 and `point_generation_probability_max` (inclusive bounds in [0, 1]). Equal bounds
 set a constant probability; both zero reproduce the initial-Points-only world.
-The fields also have matching CLI flags. Defaults remain zero for compatibility.
+The fields also have matching CLI flags. API defaults remain zero for compatibility;
+`configs/default.toml` and `configs/renewable.toml` both select 0.1–0.3 and horizon 100.
 Horizon completion sets `horizon_completed=true`, `terminated=false`, and
 `truncated=false` in the rollout and summary. Death on the horizon takes
 precedence. Survivors retain their Life and are logged as censored, with no

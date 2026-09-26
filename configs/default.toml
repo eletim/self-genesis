@@ -1,11 +1,13 @@
+# v0.0.4 runnable renewable experiment; API defaults retain zero generation.
+survival_horizon = 100
 seed = 0
 device = "cpu"
 num_agents = 4
 appearance_dim = 8
 initial_life = 10
 initial_points = 3
-point_generation_probability_min = 0.0
-point_generation_probability_max = 0.0
+point_generation_probability_min = 0.1
+point_generation_probability_max = 0.3
 vocabulary_size = 4
 max_message_length = 3
 memory_dim = 16

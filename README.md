@@ -419,7 +419,7 @@ separate seeded streams with matching CPU/CUDA resource draws. Collector resets
 restore the configured population and abilities while continuing generation,
 encounter, and policy sampling streams; recreating a collector replays the run.
 
-## Matched fixed-policy comparisons
+## Matched policy comparisons
 
 ```sh
 python -m self_genesis compare --config configs/renewable.toml --device cpu \
@@ -429,8 +429,8 @@ python -m self_genesis compare --config configs/renewable.toml --device cpu \
 
 `compare` trains one shared network for the configured number of episodes using
 only the existing survival objective. It then freezes the weights and evaluates
-learned, always-GIVE, and always-NOTHING populations separately for every
-`--evaluation-seeds` value (default: the configured seed). Each evaluation starts
+learned, always-GIVE, always-NOTHING, and producer-oracle populations separately
+for every `--evaluation-seeds` value (default: the configured seed). Each evaluation starts
 with fresh agent memory and a fresh world under identical resources, generation
 probabilities, channel limits, horizon, and seed. Fixed policies send empty
 messages; GIVE is attempted on every encounter, even without Points. All policies
@@ -438,6 +438,18 @@ use the existing encounter sampling, simultaneous transfer, decay, death, and
 post-decay generation rules. Sampling streams restart for each policy; realized
 encounters and generation draws can diverge as survival populations diverge.
 Learned actions remain sampled, with no learning during evaluation.
+
+The `producer-oracle` baseline sends empty messages and attempts GIVE exactly
+when the partner's true generation probability is positive and at least the
+midpoint of the configured generation-probability range; otherwise it chooses
+NOTHING. Equality at a positive midpoint qualifies; zero-generation populations
+always choose NOTHING. Like always-GIVE, it may attempt aid without Points and
+relies on the world to enforce eligibility. Its private lookup associates the
+initial Appearances with true generation probabilities, available only to this
+evaluation baseline. Learned observations, training inputs, and rewards receive
+no generation knowledge. This is a privileged heuristic, not an optimal policy
+or a guarantee of improved survival. Use evaluation seeds distinct from the
+training seed for held-out results, as in the example above.
 
 The new JSON output file contains training settings and update results, evaluation
 seeds, initial Appearances and generation abilities, and one result per policy and

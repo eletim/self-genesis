@@ -114,14 +114,15 @@ class RenewableIntegrationTests(unittest.TestCase):
                 for seed in (101, 102):
                     evaluations = [r for r in reports[0]['evaluations'] if r['seed'] == seed]
                     self.assertEqual([r['policy'] for r in evaluations],
-                                     ['learned', 'always-GIVE', 'always-NOTHING'])
+                                     ['learned', 'always-GIVE', 'always-NOTHING',
+                                      'producer-oracle'])
                     for result in evaluations:
                         self.assertEqual(result['initial'], evaluations[0]['initial'])
                         self.assertEqual(result['config'], evaluations[0]['config'])
                         self.assertLessEqual(result['steps'], horizon)
                         self.assertEqual(result['successful_aid'], sum(
                             r['successful_aid'] for r in result['relationship_actions']))
-                    nothing = evaluations[-1]
+                    nothing = evaluations[2]
                     self.assertEqual(nothing['survival_returns'], [min(4, horizon)] * 4)
                     self.assertEqual(nothing['successful_aid'], 0)
                     self.assertEqual(nothing['action_counts']['GIVE'], 0)

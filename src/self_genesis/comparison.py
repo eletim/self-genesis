@@ -1,4 +1,4 @@
-"""Matched evaluations of learned and fixed policies using shared world rules."""
+"""Matched evaluations of learned, fixed, and oracle policies using shared world rules."""
 
 from dataclasses import asdict, replace
 import json
@@ -27,6 +27,30 @@ class FixedPolicy:
 
     def act(self, observation):
         return self.action
+
+
+class ProducerOracle:
+    """Evaluation-only aid to positive producers at or above the range midpoint.
+
+    The privileged Appearance-to-ability lookup belongs only to this baseline,
+    never to observations, the learned network, or its training collector.
+    """
+
+    def __init__(self, world: World, config: ExperimentConfig):
+        self.probabilities = dict(zip(
+            map(tuple, world.state.appearance.tolist()),
+            world.state.point_generation_probability.tolist(), strict=True))
+        midpoint = (config.point_generation_probability_min
+                    + config.point_generation_probability_max) / 2
+        self.threshold = world.state.point_generation_probability.new_tensor(midpoint).item()
+
+    def communicate(self, observation):
+        return ()
+
+    def act(self, observation):
+        probability = self.probabilities[tuple(observation.partner_appearance.tolist())]
+        return (Action.GIVE if probability > 0 and probability >= self.threshold
+                else Action.NOTHING)
 
 
 class _ActionRecorder:
@@ -64,14 +88,16 @@ def _action_metrics(rows):
 
 
 @torch.no_grad()
-def evaluate_policy(config: ExperimentConfig, network: RecurrentPolicy | Action) -> dict:
+def evaluate_policy(config: ExperimentConfig,
+                    network: RecurrentPolicy | Action | type[ProducerOracle]) -> dict:
     """Fresh world and policy state for one seed; never update learned weights."""
     budget = _budget(config)
     world = World(config)
     protocol = EncounterProtocol(world, seed=config.seed,
                                  vocabulary_size=config.vocabulary_size,
                                  max_message_length=config.max_message_length)
-    policies = [(FixedPolicy(network) if isinstance(network, Action) else AgentPolicy(network))
+    policies = [(ProducerOracle(world, config) if network is ProducerOracle else
+                 FixedPolicy(network) if isinstance(network, Action) else AgentPolicy(network))
                 for _ in range(config.num_agents)]
     initial = dict(appearance=world.state.appearance.tolist(),
                    point_generation_probability=world.state.point_generation_probability.tolist())
@@ -121,7 +147,7 @@ def evaluate_policy(config: ExperimentConfig, network: RecurrentPolicy | Action)
 
 
 def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=None) -> dict:
-    """Train once, then evaluate three policies separately for each matched seed."""
+    """Train once, then evaluate four policies separately for each matched seed."""
     _budget(config)
     seeds = [config.seed] if evaluation_seeds is None else list(evaluation_seeds)
     if not seeds:
@@ -142,7 +168,8 @@ def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=N
         evaluations = []
         for condition in conditions:
             for name, policy in (("learned", network), ("always-GIVE", Action.GIVE),
-                                 ("always-NOTHING", Action.NOTHING)):
+                                 ("always-NOTHING", Action.NOTHING),
+                                 ("producer-oracle", ProducerOracle)):
                 evaluations.append(dict(policy=name, **evaluate_policy(condition, policy)))
         report = dict(schema_version=1, config=asdict(config), training=updates,
                       evaluation_seeds=seeds, evaluations=evaluations)

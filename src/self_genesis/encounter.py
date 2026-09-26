@@ -1,7 +1,7 @@
 """Seeded encounters with an uninterpreted, bounded communication channel."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import random
 from typing import Protocol
 
@@ -20,6 +20,21 @@ class Observation:
     first: bool
     received_message: tuple[int, ...]
     partner_action: Action | None
+
+
+@dataclass(frozen=True)
+class EncounterExperience:
+    """Participant-visible decisions and gift outcomes, without world identity.
+
+    Observation retains pre-step resources and the Appearance actually seen,
+    with the partner's final action revealed after both decisions. Transfer
+    success is visible to donor and recipient; generation draws are not exposed.
+    """
+
+    observation: Observation
+    action: Action
+    gave: bool
+    received: bool
 
 
 class Policy(Protocol):
@@ -74,6 +89,8 @@ class EncounterProtocol:
         Empty messages are allowed. Tokens have no assigned meaning or effect
         on rewards. Invalid messages/actions leave world state unchanged.
         With fewer than two survivors, time advances without policy calls.
+        After resolution, participants with a complete_encounter callback receive
+        local experience, including the second action and successful gifts.
         """
         state = self.world.state
         if len(policies) != state.life.numel():
@@ -87,16 +104,30 @@ class EncounterProtocol:
                 self._observe(first, second, first=True)))
             reply = self._message(policies[second].communicate(
                 self._observe(second, first, first=False, message=message)))
-            first_action = policies[first].act(
-                self._observe(first, second, first=True, message=reply))
+            first_observation = self._observe(first, second, first=True, message=reply)
+            first_action = policies[first].act(first_observation)
             if not isinstance(first_action, Action):
                 raise ValueError("Policy must choose an Action")
-            second_action = policies[second].act(
-                self._observe(second, first, first=False, message=message, action=first_action))
+            second_observation = self._observe(
+                second, first, first=False, message=message, action=first_action)
+            second_action = policies[second].act(second_observation)
             if not isinstance(second_action, Action):
                 raise ValueError("Policy must choose an Action")
             for agent, partner, action in (
                 (first, second, first_action), (second, first, second_action),
             ):
                 decisions[agent] = Decision(action, partner if action is Action.GIVE else None)
-        return self.world.step(decisions)
+        result = self.world.step(decisions)
+        if len(living) >= 2:
+            for agent, partner, observation, action, partner_action in (
+                (first, second, first_observation, first_action, second_action),
+                (second, first, second_observation, second_action, first_action),
+            ):
+                # Completion is optional for fixed and external policies.
+                complete = getattr(policies[agent], "complete_encounter", None)
+                if complete is not None:
+                    complete(EncounterExperience(
+                        replace(observation, partner_action=partner_action), action,
+                        (agent, partner) in result.successful_transfers,
+                        (partner, agent) in result.successful_transfers))
+        return result

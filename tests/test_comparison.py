@@ -312,3 +312,35 @@ class ComparisonTests(unittest.TestCase):
                                    '--output', str(invalid)], capture_output=True, text=True)
                     self.assertEqual(failed.returncode, 2)
                     self.assertFalse(invalid.exists())
+
+    def test_analysis_cannot_change_policy_or_training_targets(self):
+        from self_genesis.analysis import RelationshipAnalysis
+        original = RelationshipAnalysis.record_step
+
+        def poisoned_analysis(analysis, record):
+            original(analysis, record)
+            for row in analysis.rows:
+                row['prior'] = {key: 999 for key in row['prior']}
+                row['prior_third_party'] = {key: 999 for key in row['prior_third_party']}
+                row['partner_generation_probability'] = -999
+                row['partner_producer_bin'] = 'unknown'
+
+        with tempfile.TemporaryDirectory() as directory:
+            for method in ('actor_critic', 'reinforce'):
+                config = ExperimentConfig(num_agents=3, initial_life=4, episodes=2,
+                                          survival_horizon=3, training_method=method)
+                reports = []
+                for poisoned in (False, True):
+                    path = Path(directory) / f'{method}-{poisoned}.json'
+                    with patch.object(RelationshipAnalysis, 'record_step',
+                                      poisoned_analysis if poisoned else original):
+                        run_comparison(config, path)
+                    reports.append(json.loads(path.read_text()))
+                self.assertEqual(reports[0]['training_runs'], reports[1]['training_runs'])
+                for before, after in zip(reports[0]['evaluations'], reports[1]['evaluations']):
+                    for key in ('survival_returns', 'lifetimes', 'final_life', 'final_points',
+                                'action_counts', 'entity_memory_events', 'communication_messages'):
+                        self.assertEqual(before[key], after[key], key)
+                    self.assertEqual([r['action'] for r in before['relationship_actions']],
+                                     [r['action'] for r in after['relationship_actions']])
+                    self.assertNotEqual(before['partner_history_metrics'], after['partner_history_metrics'])

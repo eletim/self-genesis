@@ -152,9 +152,9 @@ Rows link the current `action` (GIVE/NOTHING) and `successful_aid` to the actor'
 and partner's generation probabilities and cumulative `*_prior_generated_points`.
 The `prior` object counts encounters, received GIVE attempts, received NOTHING,
 received successful aid, outgoing GIVE attempts, and outgoing successful aid.
-Histories are directed, keyed by observer and exact partner Appearance, and reset
-each episode. Identical Appearances are consequently indistinguishable in these
-histories; agent/partner indices remain available as logging references.
+Histories are directed, keyed by observer and actual partner index, and reset
+each episode. Identical Appearances do not merge analysis histories; these
+indices never enter learned policy observations.
 Both actions use only earlier steps: the current partner action, successful
 transfers, and newly generated Points enter history after both rows are emitted.
 Non-increasing step numbers are rejected.
@@ -172,6 +172,11 @@ These are descriptive associations, not evidence of causal reciprocity or policy
 access to hidden generation traits. For older schema-1 logs lacking generation
 or transfer records, unavailable values are `null`, not assumed zero/successful;
 attempt and encounter histories remain available.
+
+Each update also includes `partner_history_metrics`, using the same bins and
+definitions as comparison reports (see README). `prior_third_party` records
+received and outgoing aid for both the actor and partner involving anyone
+outside the current pair, separately for attempts and successful transfers.
 
 For deeper inspection, load each line with `json.loads`. `step.participants`
 links encounter order to agent logging indices; `callbacks` holds ordered

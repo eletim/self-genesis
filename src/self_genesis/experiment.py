@@ -13,6 +13,7 @@ class ExperimentState:
     life: torch.Tensor
     points: torch.Tensor
     appearance: torch.Tensor
+    point_generation_probability: torch.Tensor
 
 
 def resolve_device(requested: str) -> torch.device:
@@ -36,8 +37,16 @@ def initialize(config: ExperimentConfig, *, seed_rng: bool = True) -> Experiment
     appearance = torch.rand(
         (config.num_agents, config.appearance_dim), generator=generator
     ).to(device)
+    # Separate seeded streams keep ability independent of Appearance dimensions
+    # and preserve global policy sampling streams on episode reset.
+    ability_generator = torch.Generator(device="cpu").manual_seed(config.seed + 1)
+    probability = torch.rand(config.num_agents, generator=ability_generator)
+    probability = (config.point_generation_probability_min + probability *
+                   (config.point_generation_probability_max -
+                    config.point_generation_probability_min))
     return ExperimentState(
         life=torch.full((config.num_agents,), config.initial_life, device=device),
         points=torch.full((config.num_agents,), config.initial_points, device=device),
         appearance=appearance,
+        point_generation_probability=probability.to(device),
     )

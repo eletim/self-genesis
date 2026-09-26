@@ -90,7 +90,9 @@ class RolloutCollector:
 
     def reset(self) -> None:
         """Restore the world and agent state while preserving sampling streams."""
+        generation_rng = self.world._generation_rng
         self.world = World(self.config, seed_rng=False)
+        self.world._generation_rng = generation_rng
         self.protocol.world = self.world
         self.elapsed_steps = 0
         for agent in self.agents:

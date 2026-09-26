@@ -19,9 +19,10 @@ def survival_policy_loss(rollout: Rollout) -> torch.Tensor:
     owner's reward-to-go. Unselected and lone-survivor steps still contribute
     rewards. Recurrent graphs remain intact; discrete choices use score-function
     gradients. No baseline, social bonus, or auxiliary state target is used.
-    Require complete episodes rather than silently zero-bootstrap time limits.
+    Require extinction or completion of the explicit finite survival objective.
+    Interrupted collection is not a completed objective and cannot be trained.
     """
-    if (not rollout.terminated or rollout.truncated
+    if (not (rollout.terminated or rollout.horizon_completed) or rollout.truncated
             or any(items and items[0].step != 0 for items in rollout.experiences)):
         raise ValueError("Survival loss requires a complete episode from step zero")
     terms = []
@@ -42,19 +43,21 @@ class TrainingResult:
     loss: float
     steps: int
     survival_returns: tuple[float, ...]
+    terminated: bool
+    horizon_completed: bool
 
 
 def train_episode(collector: RolloutCollector,
                   optimizer: torch.optim.Optimizer) -> TrainingResult:
-    """Reset, collect to extinction, and update the collector's shared network.
+    """Reset, collect a complete survival objective, and update shared weights.
 
     Pass an optimizer for collector.network. Reset preserves sampling streams
     across episodes. Results contain no retained autograd graph.
     """
-    collector.reset()
-    # No agent can outlive its initial Life plus every Point in the world.
     config = collector.config
-    rollout = collector.collect(config.initial_life + config.num_agents * config.initial_points)
+    budget = _training_budget(config)
+    collector.reset()
+    rollout = collector.collect(budget)
     loss = survival_policy_loss(rollout)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
@@ -62,15 +65,26 @@ def train_episode(collector: RolloutCollector,
     optimizer.step()
     result = TrainingResult(
         loss.item(), rollout.steps,
-        tuple(sum(item.reward for item in items) for items in rollout.experiences))
+        tuple(sum(item.reward for item in items) for items in rollout.experiences),
+        rollout.terminated, rollout.horizon_completed)
 
     if collector.recorder is not None:
         collector.recorder.record_training(result, optimizer)
     return result
 
 
+def _training_budget(config: ExperimentConfig) -> int:
+    if config.survival_horizon is not None:
+        return config.survival_horizon
+    if config.point_generation_probability_max > 0:
+        raise ValueError("Renewable training requires an explicit survival_horizon")
+    # Without renewal, no agent outlives its Life plus all initial Points.
+    return config.initial_life + config.num_agents * config.initial_points
+
+
 def run_training(config: ExperimentConfig, output: Path) -> dict:
     """Run a fixed number of complete updates and persist observations to JSONL."""
+    _training_budget(config)  # Validate before creating an output file.
     device = resolve_device(config.device)
     torch.manual_seed(config.seed)
     network = RecurrentPolicy(

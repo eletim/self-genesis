@@ -9,6 +9,14 @@ self-genesis は、複数の学習Agentが他者との相互作用を通じて�
 自己と他者を区別して扱うことが生存上有利になる環境とNN構造を用意し、
 内部表現として何が形成されるかを観察する。
 
+## v0.0.4 の環境契約（Issue #15）
+
+本書と[代表シナリオ](representative-scenarios.md)は、
+[Issue #15](https://github.com/eletim/self-genesis/issues/15)で導入する環境の契約を定める。
+再生成・有限horizon・解析ログの実装は後続の作業項目で行う。
+v0.0.3の初期Pointを使い切る環境と比較し、他者を区別して過去の関係を利用することが
+生存上有利になり得る環境圧を調べる。援助相手の選別や協力が必ず学習されるとは仮定しない。
+
 ## 1. シンプルさを優先する
 
 最初の実験では、必要最小限の世界・Agent・学習系だけを実装する。
@@ -44,10 +52,41 @@ GIVE、会話、協力、返報などの特定行動に、
 - Lifeが0になると死亡する。
 - Pointは自分自身には使用できない。
 - Pointを他者に使用すると、その相手のLifeが増える。
-- Pointは有限かつ希少な資源とする。
+- Pointは初期値を使い切るだけでなく、生存中に再生成される希少な資源とする。
+- 各Agentは出生時に決まり、生涯固定されるPoint生成能力を持つ。
+  episodeの初期化時に設定とseedに基づいて個体差を再現可能にサンプリングする。
+- 生成能力は1 world stepあたり1 Pointを生成する確率（0以上1以下）とする。
+  生存個体ごとに各stepで抽選し、生成量は0または1 Pointとする。
+  生成確率の分布と初期Pointは設定可能とし、毎回のGIVEを無条件に賄える供給を標準としない。
+  全個体の生成確率を0にする比較設定では、初期Pointだけの環境になる。
+- 生成したPointも自分のLifeには変換できない。GIVEはPointの譲渡ではなく、
+  送り手の1 Pointを消費して生存中の相手のLifeを1増やす。
 
 したがって、自分の生命を自分だけで直接延長することはできず、
 他者との関係が生存に本質的な意味を持つ。
+
+### Resource timing
+
+1 world stepの順序は次のとおりとする。
+
+1. step開始時の生存集合とLife / Pointを確定する。
+   その集合からランダムなEncounterと先手・後手を選び、観測・Communication・行動選択を行う。
+   資源値はこの間更新しない。後手が先手の選択行動を観測する既存手順は維持する。
+2. GIVEを同時に解決する。開始時に送り手と受け手が生存し、送り手に1 Point以上あれば、
+   1 Pointを消費して相手のLifeを1回復する。Point不足のGIVEは効果も消費もない。
+   Encounterに選ばれなかった個体はNOTHINGとなる。
+3. 開始時に生存していた全個体のLifeを1減らし、0になった個体の死亡を確定する。
+   GIVEによる回復はこの減少より先なので、Lifeが1の受け手をそのstepの死亡から救える。
+4. この減少後も生存している全個体についてPointを再生成する。
+   Encounter参加の有無に依存せず、死亡個体は生成せず復活もしない。
+   新しいPointが観測・使用できるのは次のstepからで、そのstepのPoint不足を遡って補わない。
+5. 開始時に生存していた個体へ1のsurvival Rewardを与える（死亡した最後のstepも含む）。
+   全員死亡で終了する。再生成により全員死亡が保証されないため、明示的な有限horizonでも
+   episodeを終了できる契約とする。horizon到達は死亡と区別し、生存中の個体の寿命は打ち切りとして扱う。
+   horizon自体や残ったPointへの追加Rewardは与えない。
+
+生存個体が2体未満でEncounterがなくても、Life減少・死亡判定・再生成・survival Rewardは進む。
+各個体のstep後Pointは「step開始時Point − 成功したGIVEの消費 + 実際の生成量」となる。
 
 ## 5. 他者には固定Appearanceを持たせる
 
@@ -58,6 +97,12 @@ GIVE、会話、協力、返報などの特定行動に、
 
 同じ他者との過去の関係を利用する必要があるなら、
 Agent自身がAppearanceと経験を結び付ける。
+
+生成能力はAppearanceと独立にサンプリングし、Appearanceへ符号化しない。
+自分・相手の生成能力そのものや個体IDをpolicy inputへ追加しない。
+現在の自分・相手のLife / Pointという既存の観測は維持するが、
+現在のPoint残高は生成能力のラベルではない。
+能力や過去の行動を推測するには、固定AppearanceとEncounterで得た資源状態・行動の経験を利用する。
 
 ## 6. Encounterを基本的な相互作用単位とする
 
@@ -127,6 +172,10 @@ Observation、Working Memory、感性、思考は一方向のpipelineではな�
 学習アルゴリズムも固定的な思想として扱わず、
 この環境でend-to-endに学習できる妥当な方法を選ぶ。
 
+v0.0.4では環境圧の効果を比較するため、既存のNN形状、Working Memory、感性latent、
+Communication構造を維持する。学習もREINFORCEと各個体のsurvival-only reward-to-goを基本とし、
+有限horizonへの対応に必要な最小限の調整に留める。
+
 ## 12. 観察可能性を保つ
 
 性能だけでなく、何が学習されたかを後から調べられることを重視する。
@@ -134,5 +183,10 @@ Observation、Working Memory、感性、思考は一方向のpipelineではな�
 少なくとも、生存時間、死亡、GIVE / NOTHING、Life / Point、
 Communication、Agent間相互作用に加え、
 Working Memoryや感性latentを後から解析できるようにする。
+
+生成能力と実際のstepごとの生成量は解析専用ログに記録してよいが、policy inputへ流さない。
+GIVEの試行と成功した有向の援助を区別し、Appearanceによる同一相手との再Encounter、
+過去に受けたGIVE / 非GIVE、自分から行ったGIVEと後続の行動との関係を解析できるようにする。
+既存メトリクスを維持し、同じ資源・時間・Rewardの規則でalways GIVE / always NOTHINGとも比較する。
 
 ただし解析機能のために学習系を過度に複雑化しない。

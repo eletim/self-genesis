@@ -1,0 +1,6 @@
+# Minimal renewable preset, equivalent to the full configs/default.toml.
+# Explicit finite survival objective for renewable training.
+survival_horizon = 100
+initial_points = 3
+point_generation_probability_min = 0.1
+point_generation_probability_max = 0.3

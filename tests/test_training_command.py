@@ -15,7 +15,7 @@ from self_genesis.training import run_training
 class TrainingCommandTests(unittest.TestCase):
     def test_invalid_training_settings(self):
         for name in ('vocabulary_size', 'max_message_length', 'memory_dim',
-                     'affect_dim', 'episodes'):
+                     'affect_dim', 'episodes', 'survival_horizon'):
             for value in (-1, True, 1.5, '2'):
                 with self.subTest(name=name, value=value), self.assertRaises(ValueError):
                     ExperimentConfig(**{name: value})
@@ -83,6 +83,63 @@ class TrainingCommandTests(unittest.TestCase):
                 self.assertNotIn('Traceback', failed.stderr)
             self.assertEqual(original, (path / 'first.jsonl').read_bytes())
             self.assertFalse((path / 'invalid.jsonl').exists())
+
+    def test_finite_horizon_cli_and_analysis(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'run.jsonl'
+            config = Path(directory) / 'run.toml'
+            config.write_text('survival_horizon = 7\n')
+            command = [sys.executable, '-m', 'self_genesis', 'train',
+                       '--config', str(config), '--survival-horizon', '2',
+                       '--initial-life', '10', '--episodes', '2',
+                       '--point-generation-probability-max', '1', '--output', str(output)]
+            completed = subprocess.run(command, check=True, capture_output=True, text=True)
+            result = json.loads(completed.stdout)
+            self.assertEqual(result['config']['survival_horizon'], 2)
+            self.assertEqual(result['total_steps'], 4)
+            self.assertTrue(result['last_training']['horizon_completed'])
+            records = [json.loads(line) for line in output.read_text().splitlines()]
+            for record in records:
+                if record['type'] == 'summary':
+                    self.assertTrue(record['horizon_completed'])
+                    self.assertFalse(record['terminated'])
+                    self.assertFalse(record['truncated'])
+                    self.assertEqual(record['deaths'], 0)
+                    self.assertIsNone(record['mean_survival_time'])
+                    self.assertTrue(all(item['censored'] for item in record['lifetimes']))
+            analyzed = subprocess.run(
+                [sys.executable, 'examples/analyze_run.py', str(output)],
+                check=True, capture_output=True, text=True)
+            rows = [json.loads(line) for line in analyzed.stdout.splitlines()]
+            self.assertEqual(len(rows), 2)
+            for row in rows:
+                events = [r for r in records if r['episode'] == row['episode']]
+                start = events[0]
+                steps = [r for r in events if r['type'] == 'step']
+                actions = row['relationship_actions']
+                self.assertEqual(len(actions), sum(row['action_counts'].values()))
+                for action in actions:
+                    agent, partner = action['agent'], action['partner']
+                    earlier = [s for s in steps if s['step'] < action['step']]
+                    current = next(s for s in steps if s['step'] == action['step'])
+                    self.assertEqual(action['partner_appearance'], start['appearance'][partner])
+                    self.assertEqual(action['partner_generation_probability'],
+                                     start['point_generation_probability'][partner])
+                    self.assertEqual(action['partner_prior_generated_points'],
+                                     sum(s['generated_points'][partner] for s in earlier))
+                    self.assertEqual(action['prior']['encounters'],
+                                     sum(set(s['participants']) == {agent, partner}
+                                         for s in earlier))
+                    self.assertEqual(action['successful_aid'],
+                                     dict(donor=agent, recipient=partner)
+                                     in current['successful_transfers'])
+
+    def test_renewable_training_requires_horizon_before_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'run.jsonl'
+            with self.assertRaisesRegex(ValueError, 'explicit survival_horizon'):
+                run_training(ExperimentConfig(point_generation_probability_max=0.1), output)
+            self.assertFalse(output.exists())
 
     def test_unavailable_cuda_creates_no_output(self):
         with tempfile.TemporaryDirectory() as directory:

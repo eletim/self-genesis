@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "self-genesis"
-version = "0.0.3"
+version = "0.0.4"
 description = "Minimal foundation for multi-agent survival experiments"
 requires-python = ">=3.11"
 dependencies = ["torch>=2.2,<3"]

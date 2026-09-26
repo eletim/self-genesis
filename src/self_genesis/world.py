@@ -26,20 +26,26 @@ class StepResult:
     reward: torch.Tensor
     died: torch.Tensor
     done: bool
+    generated_points: torch.Tensor
+    # Directed (donor, recipient) pairs; each spends one Point and restores one Life.
+    successful_transfers: tuple[tuple[int, int], ...]
 
 
 class World:
-    """One finite world, with one decision per agent per time step.
+    """One survival world, with one decision per agent per time step.
 
     A valid GIVE spends one Point to restore one Life to another agent.
     Gifts resolve simultaneously using eligibility at the start of the step,
     before every living agent loses one Life. Dead agents never act or revive.
     Each agent alive at the start earns one survival reward, including its
-    final time step. Summed rewards therefore measure time lived.
+    final time step. Summed rewards therefore measure time lived. Survivors
+    then generate at most one Point, available for use on the next step.
     """
 
     def __init__(self, config: ExperimentConfig, *, seed_rng: bool = True):
         self.state = initialize(config, seed_rng=seed_rng)
+        # CPU draws match across devices without consuming other sampling streams.
+        self._generation_rng = torch.Generator(device="cpu").manual_seed(config.seed + 2)
 
     @property
     def alive(self) -> torch.Tensor:
@@ -70,14 +76,24 @@ class World:
 
         alive = self.alive
         restored = torch.zeros_like(state.life)
+        transfers = []
         for donor, decision in enumerate(decisions):
             if (decision.action is Action.GIVE and alive[donor]
                     and alive[decision.target] and state.points[donor] > 0):
                 state.points[donor] -= 1
                 restored[decision.target] += 1
+                transfers.append((donor, decision.target))
         state.life.add_(restored).sub_(alive.to(state.life.dtype)).clamp_(min=0)
+        survivors = self.alive
+        generated = torch.zeros_like(state.points)
+        indices = survivors.nonzero().flatten()
+        draws = torch.rand(indices.numel(), generator=self._generation_rng).to(state.life.device)
+        generated[indices] = (draws < state.point_generation_probability[indices]).to(generated.dtype)
+        state.points.add_(generated)
         return StepResult(
             reward=alive.to(torch.float32),
-            died=alive & ~self.alive,
-            done=not bool(self.alive.any()),
+            died=alive & ~survivors,
+            done=not bool(survivors.any()),
+            generated_points=generated,
+            successful_transfers=tuple(transfers),
         )

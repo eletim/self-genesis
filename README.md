@@ -4,6 +4,8 @@
 
 [Runnable CPU and RTX 5090 experiments, analysis, and validation](docs/minimal-experiment.md)
 
+[Bounded v0.0.4 renewable comparison and observed behavior](docs/renewable-experiment.md)
+
 ## Experiment foundation
 
 Requires Python 3.11+ and PyTorch. Create a virtual environment and install:
@@ -22,9 +24,11 @@ CUDA execution requires a CUDA-capable PyTorch installation and compatible GPU.
 
 Edit [configs/default.toml](configs/default.toml) to configure the seed, device,
 number of agents (at least two), appearance dimension, initial Life, and initial
-Point budget. Life and appearance dimension must be positive integers; Points
-may be zero. Seeds are integers from 0 through `2**63 - 1`. Without `--config`,
-the same defaults are used. `--seed` and `--device` override file settings.
+Point budget, renewable generation bounds, and survival horizon. Life and
+appearance dimension must be positive integers; Points may be zero. Seeds are integers from 0 through `2**63 - 1`. Without `--config`,
+the API defaults retain zero generation and no horizon for compatibility. The
+sample default file uses generation probabilities 0.1–0.3 and horizon 100.
+`--seed` and `--device` override file settings.
 Unknown configuration keys and invalid values fail with an error.
 
 Device choices are `cpu` (default), `cuda` (fails if unavailable), and `auto`
@@ -61,15 +65,15 @@ Life reaching zero means permanent death. Dead agents cannot act or receive
 Life. A GIVE involving a dead agent or a donor without Points does nothing and
 costs nothing. Self-directed and invalid targets, malformed decisions, and
 incorrect decision counts raise `ValueError` before changing the world.
-Points never regenerate or transfer to recipients, and Appearance never changes.
+Points never transfer to recipients, and Appearance never changes. With positive
+generation probabilities, survivors may generate a Point after decay (see below).
 
 `StepResult.reward` gives each agent alive at the start of the step one reward,
 including its final step: accumulated reward is its lifetime in world steps.
 There are no GIVE, receipt, cooperation, or other social bonuses.
 `StepResult.died` marks new deaths, and `done` becomes true when everyone is dead.
-Further steps return zero rewards and no new deaths. Finite initial Points
-bound how much Life can be restored, so even mutual giving cannot sustain the
-world indefinitely.
+Further steps return zero rewards and no new deaths. With zero generation, finite
+initial Points bound restored Life; renewable training instead requires a finite horizon.
 
 ## Encounter communication
 
@@ -191,10 +195,12 @@ they are not selected or are the lone survivor. Death includes the final surviva
 reward, stops subsequent experience for that agent, and clears its live recurrent
 state. Returned decisions keep their graphs even after death or explicit reset.
 
-`segment.terminated` means extinction. `segment.truncated` means the collection
-budget ran out while survivors remain; extinction on the last allowed step takes
+`segment.terminated` means extinction. `segment.horizon_completed` means the
+configured survival horizon was reached with survivors. `segment.truncated` means the collection budget ran out before
+either episode ending; extinction on the last allowed step takes
 precedence. Calling `collect` again continues the same episode, step counter,
-and recurrent graph. Calling it after extinction returns an empty terminated
+and recurrent graph until the horizon. After horizon completion, reset explicitly
+to begin another episode. Calling it after extinction returns an empty terminated
 segment. Budgets must be positive integers. `collector.reset()` explicitly
 restores configured resources and appearances and clears all live agent state.
 Network weights and the Python, PyTorch, and encounter RNG streams are preserved,
@@ -235,10 +241,14 @@ for _ in range(3):
 
 `train_episode` explicitly resets the collector, collects a complete episode,
 backpropagates the survival policy loss, detaches live state, and steps the
-supplied optimizer. Initial Life plus the world's total initial Points bounds
-collection to extinction. Sampling streams continue across resets. Results report a
-scalar loss, world steps, and separate agent survival totals without retaining
-training graphs. Use an optimizer over the collector's network parameters.
+supplied optimizer. Set `survival_horizon` to a positive integer (TOML or
+`--survival-horizon`) to finish after that many world steps, or earlier extinction.
+The objective is each agent's survival reward through that horizon, with no
+bootstrap or terminal bonus. Without a horizon (the API default), initial Life plus
+total initial Points bounds collection to extinction; renewable training requires
+an explicit horizon. Sampling streams continue across resets. Results report a
+scalar loss, world steps, ending flags, and separate agent survival totals
+without retaining training graphs. Use an optimizer over the collector's network parameters.
 
 `survival_policy_loss(rollout)` is also available for complete episodes collected
 from step zero. It weights every sampled message and action by its owner's
@@ -276,19 +286,26 @@ Records contain ordinary numbers and lists, without retaining autograd graphs.
 
 - `episode_start`: effective world settings (including seed), resolved device,
   policy/channel dimensions, initial Appearance, Life, Points, Working Memory,
-  and affect latents. Seed covers collection; callers still control initial
+  and affect latents, plus each agent's fixed `point_generation_probability`.
+  Seed covers collection; callers still control initial
   network weights and must seed before network construction for repeatability.
 - `step`: zero-based episode step, ordered encounter participants, both messages
   followed by both actions, each callback's observation, sampled choice, log
   probability, and memory/affect before and after. Rewards and new deaths cover
   every agent. Life/Point arrays are post-step population distributions in agent
   order; state arrays are captured before death clears the live adapter. No
-  encounter produces empty participant and callback lists.
+  encounter produces empty participant and callback lists. `generated_points`
+  records actual post-decay generation for every agent, including nonparticipants.
+  `successful_transfers` lists directed `{donor, recipient}` events: each spends
+  one donor Point and restores one recipient Life before decay. Empty lists mean
+  no successful transfers. Together with initial resources, these fields permit
+  per-agent reconstruction of Life and Points at every step.
 - `summary`: cumulative episode deaths, observed lifetimes, zero-based death
   steps, token counts by token number, and sampled GIVE/NOTHING counts and
   fractions. The denominator is encounter action callbacks, excluding automatic
   NOTHING for unselected agents. GIVE counts include attempts with no Points;
-  resource changes show realized effects. Fractions are null with no callbacks.
+  successful transfer events distinguish realized effects from those attempts.
+  Fractions are null with no callbacks.
   Collection budget and termination/truncation flags describe this segment.
 - `training`: the survival policy loss used for the completed update, per-agent
   survival returns, optimizer class, and parameter-group settings.
@@ -299,7 +316,11 @@ only deaths (null when none), and `mean_observed_lifetime` includes the observed
 ages of survivors. Continued segments update cumulative summaries; do not sum
 summaries across segments. Raw step rewards permit independent reconstruction.
 A reset or closing the file does not turn unfinished lifetimes into deaths.
+Survivors at a completed survival horizon remain censored; horizon completion
+does not imply extinction or make `mean_survival_time` available.
 Agent and episode numbers are logging keys only and never enter policy inputs.
+Generation abilities, generation outcomes, and transfer events are analysis-only
+fields and are not added to policy observations.
 The `train` command also records these observations automatically.
 
 ## Configurable training command
@@ -311,7 +332,7 @@ python -m self_genesis train --config configs/default.toml --device cpu \
 
 The default command (or explicit `init`) still prints initialization JSON.
 `train` builds one shared recurrent network and Adam optimizer and performs
-exactly `episodes` complete survival-policy updates. Each episode is bounded by
+exactly `episodes` complete survival-policy updates. With zero generation, each episode is bounded by
 `initial_life + num_agents * initial_points` world steps, so there is no
 truncation bootstrap or open-ended loop. Full episode graphs are held in memory;
 keep resource budgets small for exploratory runs.
@@ -319,11 +340,13 @@ keep resource budgets small for exploratory runs.
 All flat TOML settings can also be overridden with hyphenated CLI flags:
 `--num-agents`, `--appearance-dim`, `--initial-life`, `--initial-points`,
 `--vocabulary-size`, `--max-message-length`, `--memory-dim`, `--affect-dim`,
-`--episodes`, `--learning-rate`, `--seed`, and `--device`.
+`--episodes`, `--learning-rate`, `--seed`, `--device`, `--survival-horizon`,
+`--point-generation-probability-min`, and `--point-generation-probability-max`.
 Vocabulary, memory, affect dimensions, and episode count must be positive
 integers. Message length must be a nonnegative integer; zero disables messages.
-Learning rate must be finite and positive. Defaults are listed in the sample
-configuration. The objective remains undiscounted per-agent survival return.
+Learning rate must be finite and positive. The runnable renewable settings are
+listed in the sample configuration; API defaults keep zero generation and no
+horizon. The objective remains undiscounted per-agent survival return.
 
 Training seeds network initialization before moving weights to CPU/CUDA and seeds
 collection once, preserving sampling streams across episode resets. Repeat runs
@@ -339,3 +362,73 @@ the recorder after collector construction, so only the requested episodes are
 recorded, numbered from zero, each with a summary and training result. Read it with
 `json.loads(line)` for each line. It is observation data, not a model checkpoint.
 If interrupted, flushed records remain accessible but the run may be incomplete.
+
+### Renewable Points
+
+`configs/renewable.toml` enables scarce renewable Points for bounded
+`RolloutCollector.collect(max_steps=...)` experiments and finite-horizon training:
+
+```sh
+python -m self_genesis train --config configs/renewable.toml --survival-horizon 100 --output renewable.jsonl
+```
+
+Each agent samples a lifetime-fixed probability uniformly between `point_generation_probability_min`
+and `point_generation_probability_max` (inclusive bounds in [0, 1]). Equal bounds
+set a constant probability; both zero reproduce the initial-Points-only world.
+The fields also have matching CLI flags. API defaults remain zero for compatibility;
+`configs/default.toml` and `configs/renewable.toml` both select 0.1–0.3 and horizon 100.
+Horizon completion sets `horizon_completed=true`, `terminated=false`, and
+`truncated=false` in the rollout and summary. Death on the horizon takes
+precedence. Survivors retain their Life and are logged as censored, with no
+fabricated death; `mean_survival_time` remains null. Interrupted collections
+remain truncated and cannot be used as complete training episodes.
+
+After simultaneous GIVE, Life decay, and death resolution, every survivor draws
+0 or 1 new Point, including agents outside the Encounter and lone survivors.
+`StepResult.generated_points` reports actual generation. New Points can only be
+observed or spent next step and can only restore another agent's Life. Abilities
+are world state, never policy inputs. Appearance, ability, and generation use
+separate seeded streams with matching CPU/CUDA resource draws. Collector resets
+restore the configured population and abilities while continuing generation,
+encounter, and policy sampling streams; recreating a collector replays the run.
+
+## Matched fixed-policy comparisons
+
+```sh
+python -m self_genesis compare --config configs/renewable.toml --device cpu \
+  --episodes 2 --survival-horizon 100 --seed 42 --evaluation-seeds 101 102 \
+  --output comparison.json
+```
+
+`compare` trains one shared network for the configured number of episodes using
+only the existing survival objective. It then freezes the weights and evaluates
+learned, always-GIVE, and always-NOTHING populations separately for every
+`--evaluation-seeds` value (default: the configured seed). Each evaluation starts
+with fresh agent memory and a fresh world under identical resources, generation
+probabilities, channel limits, horizon, and seed. Fixed policies send empty
+messages; GIVE is attempted on every encounter, even without Points. All policies
+use the existing encounter sampling, simultaneous transfer, decay, death, and
+post-decay generation rules. Sampling streams restart for each policy; realized
+encounters and generation draws can diverge as survival populations diverge.
+Learned actions remain sampled, with no learning during evaluation.
+
+The new JSON output file contains training settings and update results, evaluation
+seeds, initial Appearances and generation abilities, and one result per policy and
+seed. Results include per-agent survival returns and censored lifetimes, deaths,
+final resources, action counts/fractions, successful aid counts, and the existing
+prior-relationship action rows. `relationship_metrics` groups action counts,
+fractions, and successful aid by unseen partners, previously received aid, and
+previously encountered partners without received aid. Only earlier steps determine
+these groups; empty groups have null fractions. Action denominators count encounter
+callbacks, including failed GIVE attempts, and exclude nonparticipants. Survivors
+at the horizon remain censored; mean survival time is reported only at extinction.
+These are descriptive comparisons, with no prescribed learned behavior or added
+rewards. Repeatability applies within the same device and software environment.
+
+For the initial-Points-only comparison, use the same command with
+`--point-generation-probability-min 0 --point-generation-probability-max 0` and a
+new output filename. Keep the other settings and seeds unchanged when comparing
+resource regimes. Zero generation also supports omission of the horizon, running
+to extinction; renewable comparison requires an explicit horizon. Existing output
+files are never overwritten. The comparison JSON is separate from training JSONL
+and does not go through `examples/analyze_run.py`.

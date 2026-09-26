@@ -2,6 +2,8 @@
 
 These scenarios are durable examples of the behavior self-genesis is intended to study.
 They are not fixed expected outputs and should not be treated as hard-coded policies for the agents.
+The v0.0.4 resource rules follow the [Issue #15 design contract](design-principles.md),
+including its step order; implementation belongs to subsequent work items.
 
 ## 1. 他者からのみLifeを回復できる
 
@@ -45,3 +47,46 @@ Agentに「これは自分」「これは他者」といった内部表現の正
 自分の状態・自分が受けた行動・自分が行った行動と、
 他者の状態・行動を区別することが生存に有利になる環境を用意し、
 その結果としてどのような内部表現が形成されるかを観察する。
+
+## 7. Pointを使い切っても、他者への援助機会が再び生まれる
+
+Agent Aが最後のPointをBへのGIVEに使い、そのstepのLife減少後も生存する。
+Aは固定の生成確率に従って0または1 Pointを生成する。生成は毎回保証されない。
+生成されたPointは次のstep以降、ランダムにEncounterした他者へのGIVEに使える。
+Bからのお返しやAとBの再Encounterは保証されず、Aは自分を直接回復できない。
+生成能力を全個体で0にした比較では、使い切ったPointは戻らない。
+
+## 8. 生成能力はAppearanceから直接読めない
+
+Agent BとCは異なる生成能力を生涯保持するが、その値はAのpolicy inputには入らない。
+A自身の生成能力もAへの直接入力にはならない。
+Appearanceは能力と独立で、能力の大小を表す印や教師ラベルを含まない。
+現在のPointが多いことだけでは、高い生成能力なのか、使わずに残しているのかは分からない。
+
+AはBやCとのランダムな再Encounterで、固定Appearance、観測したPoint、
+以前に受けた援助や受けなかった経験、自分が援助した経験を現在の判断へ利用できる。
+生成能力が高い相手が必ずGIVEするわけではなく、Point不足でGIVEできなかった場合もある。
+誰を生かすと将来の自分の生存に有利かを学習できる余地を調べ、特定の選別方策を正解にはしない。
+既存のWorking Memory・感性・Communication・NN構造でこの比較を行う。
+
+## 9. 生成は当該stepのGIVEや死亡判定に先回りしない
+
+step開始時にAはLife=2、Point=0、BはLife=1、Point=1で、両者がGIVEを選ぶ。
+AのGIVEはPoint不足で効果も消費もなく、BのGIVEだけがAのLifeを1増やす。
+全生存個体のLifeを1減らすとAはLife=2、BはLife=0となり、Bは死亡する。
+その後Aが1 Pointを生成しても、失敗したGIVEは再実行されず、Bは復活しない。
+Bは生成能力を持っていても死亡後には生成しない。
+開始時には両者とも生存していたので、このstepのRewardはそれぞれ1となる。
+
+逆に開始時のAに1 Pointあれば、相互GIVEは同時に成功し、
+Bは回復後のLife減少でLife=1に留まり、その後の再生成対象となる。
+Encounterに選ばれなかった生存個体にも同じLife減少・死亡判定後の生成規則が適用される。
+
+## 10. 生存が続く場合は有限horizonで観測を区切る
+
+再生成と他者からの援助により、設定したhorizonに達してもAが生存している場合がある。
+通常どおり最後のstepまで解決して終了し、Aを死亡扱いにはしない。
+期間内の各step開始時に生存していたことだけをRewardとし、GIVE・生成・残存Pointへの追加Rewardはない。
+生存期間はhorizonで打ち切られた値として記録する。
+always GIVE / always NOTHINGとの比較にも同じhorizonと環境規則を用い、
+学習方策の優位や協力の成立をシナリオの必須結果とはしない。

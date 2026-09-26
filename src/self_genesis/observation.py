@@ -69,6 +69,8 @@ class RunRecorder:
                 "memory_dim", "affect_dim")},
             **_resources(collector.world),
             appearance=collector.world.state.appearance.tolist(),
+            point_generation_probability=(
+                collector.world.state.point_generation_probability.tolist()),
             states=[_state(agent.state) for agent in collector.agents])
 
     def record_step(self, collector, result, policies):
@@ -110,17 +112,22 @@ class RunRecorder:
         self._write(
             "step", step=collector.elapsed_steps, participants=participants,
             callbacks=callbacks, rewards=result.reward.tolist(), died=result.died.tolist(),
+            generated_points=result.generated_points.tolist(),
+            successful_transfers=[{"donor": donor, "recipient": recipient}
+                                  for donor, recipient in result.successful_transfers],
             **_resources(collector.world),
             states=[_state(agent.state) for agent in collector.agents])
 
-    def record_summary(self, collector, *, max_steps, steps, terminated):
+    def record_summary(self, collector, *, max_steps, steps, terminated,
+                       horizon_completed=False):
         completed = [age for age, death in zip(self.lifetimes, self.death_steps)
                      if death is not None]
         total_actions = sum(self.actions.values())
         self._write(
             "summary", elapsed_steps=collector.elapsed_steps,
             collection_max_steps=max_steps, collection_steps=steps,
-            terminated=terminated, truncated=not terminated,
+            terminated=terminated, truncated=not (terminated or horizon_completed),
+            horizon_completed=horizon_completed,
             lifetimes=[{"agent": index, "observed_steps": age,
                         "death_step": self.death_steps[index],
                         "censored": self.death_steps[index] is None}
@@ -139,6 +146,7 @@ class RunRecorder:
         self._write(
             "training", loss=result.loss, steps=result.steps,
             survival_returns=result.survival_returns,
+            terminated=result.terminated, horizon_completed=result.horizon_completed,
             optimizer=type(optimizer).__qualname__,
             optimizer_settings=[{key: value for key, value in group.items() if key != "params"}
                                 for group in optimizer.param_groups])

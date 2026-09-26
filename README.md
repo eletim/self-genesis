@@ -163,3 +163,51 @@ log probabilities. Reset or detach before collecting another segment after an
 optimizer update. Construct adapters after moving the network to its device;
 use `torch.no_grad()` for inference and clear accumulated log probabilities as
 needed. Sampling uses PyTorch's RNG (`torch.manual_seed` controls it).
+
+## Bounded multi-agent rollouts
+
+```python
+from self_genesis.rollout import RolloutCollector
+
+config = ExperimentConfig(num_agents=4, appearance_dim=8)
+network = RecurrentPolicy(config.appearance_dim)
+collector = RolloutCollector(config, network)
+segment = collector.collect(max_steps=32)
+```
+
+The collector connects the shared world, encounter protocol, and policy, using
+one independent adapter per agent. Channel bounds come from the network.
+`segment.experiences[index]` is that agent's trajectory, with an absolute episode
+step, survival reward, death flag (`terminated`), and ordered policy decisions.
+Each decision retains its observation, sampled message or action, differentiable
+log probability, and recurrent states before and after the callback. An empty
+channel still records communication and its state update, with no log probability.
+These indices route experience only; they are never fed to the policy.
+
+Living agents receive an experience on every world step, including steps when
+they are not selected or are the lone survivor. Death includes the final survival
+reward, stops subsequent experience for that agent, and clears its live recurrent
+state. Returned decisions keep their graphs even after death or explicit reset.
+
+`segment.terminated` means extinction. `segment.truncated` means the collection
+budget ran out while survivors remain; extinction on the last allowed step takes
+precedence. Calling `collect` again continues the same episode, step counter,
+and recurrent graph. Calling it after extinction returns an empty terminated
+segment. Budgets must be positive integers. `collector.reset()` explicitly
+restores the configured world and seed and clears all live agent state; it does
+not change network weights. Like world initialization, reset reseeds PyTorch's
+global sampler, so identical weights reproduce the configured episode.
+
+For survival learning, accumulate each agent's rewards backward through its
+trajectory and weight each message/action log probability by that agent's
+reward-to-go, including later steps without encounters. Join consecutive segments
+for complete episode returns, or supply an appropriate estimated future return
+at a truncation boundary; a time limit must not be treated as death. No social
+reward or learning objective is added by collection.
+
+Consume the pending loss before `collector.detach()` and an optimizer update.
+Detach preserves recurrent values while cutting history for subsequent segments;
+reset starts fresh instead. Returned records retain their graphs until released,
+so discard consumed segments to free memory. Collection never silently detaches
+at a budget boundary. Use `torch.no_grad()` for inference. The CLI remains an
+initialization smoke experiment.

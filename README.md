@@ -427,7 +427,7 @@ python -m self_genesis compare --config configs/renewable.toml --device cpu \
   --output comparison.json
 ```
 
-`compare` trains one shared network for the configured number of episodes using
+`compare` trains one shared network per training seed for the configured number of episodes using
 only the existing survival objective. It then freezes the weights and evaluates
 learned, always-GIVE, always-NOTHING, and producer-oracle populations separately
 for every `--evaluation-seeds` value (default: the configured seed). Each evaluation starts
@@ -456,7 +456,9 @@ The new JSON output file contains training settings and update results, evaluati
 seeds, initial Appearances and generation abilities, and one result per policy and
 seed. Results include per-agent survival returns and censored lifetimes, deaths,
 final resources, action counts/fractions, successful aid counts, and the existing
-prior-relationship action rows. `relationship_metrics` groups action counts,
+prior-relationship action rows. Comparison history is keyed by the actual partner,
+including when Appearances collide or are shuffled; identity and history never
+enter learned observations. `relationship_metrics` groups action counts,
 fractions, and successful aid by unseen partners, previously received aid, and
 previously encountered partners without received aid. Only earlier steps determine
 these groups; empty groups have null fractions. Action denominators count encounter
@@ -472,3 +474,63 @@ resource regimes. Zero generation also supports omission of the horizon, running
 to extinction; renewable comparison requires an explicit horizon. Existing output
 files are never overwritten. The comparison JSON is separate from training JSONL
 and does not go through `examples/analyze_run.py`.
+
+
+To compare independent training seeds and both evaluation interventions:
+
+```sh
+python -m self_genesis compare --config configs/renewable.toml --device cpu \
+  --episodes 2 --survival-horizon 100 --training-seeds 41 42 43 \
+  --evaluation-seeds 101 102 --interventions appearance-shuffle working-memory-reset \
+  --output intervention-comparison.json
+```
+
+`--training-seeds` defaults to the configured seed. Each seed initializes and trains
+its own network with the same training budget. Evaluation seeds default to the
+configured seed independently of this list; choose disjoint lists for held-out
+comparisons. Interventions are optional and applied separately to the frozen
+learned policy, alongside its untreated evaluation and the three baselines.
+
+- `appearance-shuffle`: before each world step, permute the original Appearance
+  vectors of **all** agents using an isolated `random.Random(evaluation_seed + 3)`
+  stream. The actual partner's index selects the presented vector. The permutation
+  stays fixed across the encounter's communication and action callbacks, then is
+  resampled. Fixed points and Appearances belonging to dead agents are allowed.
+  This disrupts stable perceived identity across encounters; it does not mutate
+  world Appearance, resources, abilities, encounter routing, or generation RNG.
+- `working-memory-reset`: zero every agent's Working Memory before each world
+  step, retaining affect and all world state. Memory updates normally within the
+  encounter. Affect can still carry history, so this is not a complete removal of
+  recurrent information. Neither treatment updates weights or changes rewards.
+
+Comparison schema version 2 adds `training_runs` (seed and updates),
+`training_seeds`, treatment labels, recorded `communication_messages`,
+`intervention_semantics`, `metric_semantics`, `summaries`, and
+`intervention_effects`. The original `training` list remains available for a
+single training seed; it is null for multiple seeds. Each summary pools evaluation
+samples only within one training seed, policy, and intervention:
+
+- GIVE collapse is a descriptive evaluation diagnostic: a GIVE fraction at least
+  0.95 is `near_always_GIVE`, at most 0.05 is `near_always_NOTHING`, otherwise
+  `mixed`. With no action callbacks it is `no_actions` and fractions are null.
+  Counts accompany fractions; this label does not establish training-time collapse.
+- Survival summaries retain death and censoring counts. `mean_observed_lifetime`
+  includes horizon-censored lifetimes; `mean_survival_time` is null if any lifetime
+  is censored. A horizon survivor is never counted as a death.
+- `prior_aid_give_difference` is the GIVE fraction for previously aided partners
+  minus that for encountered-but-unaided partners. Unseen partners are excluded,
+  and the difference is null if either group has no samples. Only earlier steps
+  enter history, even for the second action callback. This is descriptive dependence,
+  not a causal estimate; actual identity, abilities, and histories stay analysis-only.
+- Communication reports callback and nonempty-message counts, token counts, mean
+  length, and empirical token entropy in bits. Entropy is null with no tokens;
+  mean length is null with no callbacks. Empty messages are counted, including a
+  disabled channel. Fixed-length learned messages may show usage without utility.
+
+`intervention_effects` reports intervention-minus-untreated differences in observed
+lifetime, censoring count, and GIVE fraction for each matched training/evaluation
+seed pair. The detailed rows and summaries support history and Communication
+comparisons. World initialization and sampling streams restart identically for
+each evaluation; changed actions can subsequently change resources, survivors,
+encounters, and generation draws. Reports contain the treatment and metric
+semantics needed to interpret these differences, without adding policy inputs.

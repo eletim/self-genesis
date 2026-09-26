@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from self_genesis.config import load_config
-from self_genesis.comparison import run_comparison
+from self_genesis.comparison import INTERVENTIONS, run_comparison
 from self_genesis.experiment import initialize
 from self_genesis.training import run_training
 
@@ -18,6 +18,10 @@ def main() -> None:
                         help="New results file (train: JSONL; compare: JSON)")
     parser.add_argument("--evaluation-seeds", type=int, nargs="+",
                         help="Matched comparison seeds (default: configured seed)")
+    parser.add_argument("--training-seeds", type=int, nargs="+",
+                        help="Independent comparison training seeds (default: configured seed)")
+    parser.add_argument("--interventions", choices=INTERVENTIONS, nargs="+",
+                        help="Additional frozen learned-policy evaluation treatments")
     for name in ("num_agents", "appearance_dim", "initial_life", "initial_points",
                  "vocabulary_size", "max_message_length", "memory_dim", "affect_dim",
                  "episodes", "survival_horizon"):
@@ -37,15 +41,18 @@ def main() -> None:
         parser.error(f"{args.command} requires --output pointing to a new results file")
     if args.command == "init" and args.output is not None:
         parser.error("--output is only supported for train or compare")
-    if args.command != "compare" and args.evaluation_seeds is not None:
-        parser.error("--evaluation-seeds is only supported for compare")
+    for option in ("evaluation_seeds", "training_seeds", "interventions"):
+        if args.command != "compare" and getattr(args, option) is not None:
+            parser.error(f"--{option.replace('_', '-')} is only supported for compare")
     overrides = vars(args).copy()
-    for key in ("command", "output", "config", "evaluation_seeds"):
+    for key in ("command", "output", "config", "evaluation_seeds", "training_seeds", "interventions"):
         overrides.pop(key)
     try:
         config = load_config(args.config, **overrides)
         if args.command == "compare":
-            result = run_comparison(config, args.output, evaluation_seeds=args.evaluation_seeds)
+            result = run_comparison(config, args.output, evaluation_seeds=args.evaluation_seeds,
+                                    training_seeds=args.training_seeds,
+                                    interventions=args.interventions or ())
             print(json.dumps(result, sort_keys=True))
             return
         if args.command == "train":

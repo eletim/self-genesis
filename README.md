@@ -711,7 +711,7 @@ independently of batch ordering or other worlds' deaths and resets.
 Appearance-keyed memory storage primitive. Keys have shape
 `[world, observer, slot, appearance]`, values `[world, observer, slot, value]`,
 and occupancy `[world, observer, slot]`. It is used by the batched policy API
-below; batched encounter/training collection is not yet connected.
+below and the batched encounter executor; training collection is not yet connected.
 
 Create it with `BatchedEntityMemory.empty(worlds, observers, slots, appearance_dim,
 value_dim, device=..., dtype=...)`, reserving enough slots for each observer's
@@ -817,3 +817,47 @@ CPU/CUDA parity tests compare batched outputs, completion writes and parameter
 gradients with sequential callbacks; they also check masks, private gradients,
 reset/detach, disabled memory and empty channels. No throughput or learning
 improvement is claimed by these policy primitives.
+
+
+### Batched Encounter execution
+
+`BatchedEncounterProtocol` connects `BatchedWorld` and `RecurrentPolicy` without
+per-agent Python policy callbacks:
+
+```python
+from self_genesis.batched_encounter import BatchedEncounterProtocol
+from self_genesis.batched_world import BatchedWorld
+from self_genesis.config import ExperimentConfig
+from self_genesis.policy import RecurrentPolicy
+
+config = ExperimentConfig(device="cpu")
+world = BatchedWorld(config, seeds=[10, 20])
+network = RecurrentPolicy(config.appearance_dim)
+protocol = BatchedEncounterProtocol(world, network, seeds=[30, 40])
+state = network.initial_batch_state(2, config.num_agents, slots=config.num_agents)
+result = protocol.step(state)
+state = result.state
+```
+
+Each unfinished world with at least two survivors selects one uniform ordered
+living pair. Four batched phases preserve message, reply, first action and second
+action order. Only the second action sees the first action; completion reveals
+both final actions and successful transfers to the participants. Completion uses
+pre-step resources, messages and observed Appearance, including for participants
+who die at resolution. Unselected agents retain their state. Lone survivors
+advance time without policy decisions; completed worlds remain frozen.
+
+`result.pairs` contains routing indices (`-1` for no encounter), never policy
+features. `result.decisions` holds the four phase observations, active masks,
+choices and differentiable log probabilities, values and entropies; an entirely
+inactive batch returns no phases. Empty channels still update recurrence but
+have no sampled statistics. `result.world` contains the resource transition.
+These records retain graphs without accumulating history inside the executor.
+
+Per-world seeded CPU random streams feed tensor selection and sampling on the
+world device, without consuming global RNG state. Changing or resetting another
+world does not change a world's stream. These streams reproduce batched runs,
+not the legacy Python encounter RNG sequence. Reset world resources with
+`world.reset(row, seed=...)` and recurrent/entity state with `state.reset(mask)`;
+encounter streams continue across resets. Detach state only at an optimizer
+boundary. This executor does not change the existing sequential training CLI.

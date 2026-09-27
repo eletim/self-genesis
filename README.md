@@ -706,3 +706,26 @@ until reset. `successful_transfers` is a boolean `[world, donor]` mask whose
 recipients are the input targets. Separate CPU random streams reproduce each
 seed's sequential `World` initialization and generation on either device,
 independently of batch ordering or other worlds' deaths and resets.
+
+`BatchedEntityMemory` in `self_genesis.entity_memory` provides the corresponding
+Appearance-keyed memory storage primitive. Keys have shape
+`[world, observer, slot, appearance]`, values `[world, observer, slot, value]`,
+and occupancy `[world, observer, slot]`. It is independent of the sequential
+policy adapter; batched encounter/training collection is not yet connected.
+
+Create it with `BatchedEntityMemory.empty(worlds, observers, slots, appearance_dim,
+value_dim, device=..., dtype=...)`, reserving enough slots for each observer's
+distinct partners. `retrieve(appearance, active=mask)` and
+`write(appearance, value, active=mask)` accept one observed Appearance per
+world/observer, with an optional boolean `[world, observer]` participation mask.
+Unseen/inactive reads return zero; inactive writes preserve state. Equal
+Appearances share one entry, irrespective of partner identity. New keys in a
+full table raise an error; existing entries can still be updated. A zero value
+dimension disables storage.
+
+Writes return new state and preserve gradients through learned values and
+previous encounters. Assign their result back to the memory variable. At each
+episode boundary, also assign `memory = memory.reset(completed_worlds)` using a
+boolean `[world]` mask alongside the world reset. This clears selected worlds'
+keys and values while preserving ongoing worlds and their gradient history.
+Call `detach()` only at an intentional training graph boundary.

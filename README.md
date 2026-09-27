@@ -169,7 +169,8 @@ establish useful memory; use a longer horizon and training budget for that.
 ## v0.0.6 Entity Memory evidence
 
 The current default adds 16-dimensional Entity Memory keyed by perceived
-Appearance; `--entity-memory-dim 0` retains the v0.0.5 architecture. The
+Appearance; `--entity-memory-dim 0 --thought-mode shallow` restores the v0.0.5
+architecture. The
 [matched CPU experiment](docs/entity-memory-experiment.md) trained each condition
 for 100 updates with three training seeds and three held-out seeds. Mean lifetime
 was 12.4722 steps enabled versus 12.3611 disabled, with paired seed differences
@@ -498,7 +499,8 @@ with the distinct Appearances observed during an episode; there is no eviction o
 approximate match.
 
 `entity_memory_dim` defaults to 16 in the network and experiment configuration.
-Set it to `0` in TOML or pass `--entity-memory-dim 0` to disable Entity Memory and
+Set it to `0` in TOML or pass `--entity-memory-dim 0` to disable Entity Memory.
+Also set `thought_mode = "shallow"` in TOML or pass `--thought-mode shallow` to
 recover the v0.0.5 layer shapes, initialization, and forward computation. The
 existing `working-memory-reset` intervention resets only Working Memory.
 
@@ -1099,7 +1101,7 @@ observation = BatchedObservation(
 active = torch.tensor([[True, False, False, False], [False, True, False, False]])
 logits, values, state = network.forward_batch(
     observation, state, communicating=True, active=active)
-print(network.parameter_count)  # 4211847
+print(network.parameter_count)  # 4473991
 ```
 
 All observations and masks must be on the policy device; Appearance and state

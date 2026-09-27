@@ -239,8 +239,10 @@ For 32-agent comparisons, keep all other settings fixed and run with
 `--num-agents 32 --encounter-count 1`, then counts `4`, `8`, and `16`.
 These options combine with existing `--capacity-preset small|medium|large`
 and leave Actor-Critic coefficients unchanged. Resolved density settings are
-saved in the existing configuration records and summaries. Sequential traces
-include explicit `pairs` for relationship analysis; batched trace participants
+saved in the existing configuration records and summaries. The
+[32-agent RTX 5090 density benchmark](docs/rtx5090-density.md) records throughput,
+utilization, VRAM and stability with fixed capacity and learning/resource settings.
+Sequential traces include explicit `pairs` for relationship analysis; batched trace participants
 are consecutive first/second pairs, padded with `-1` for unused slots.
 
 Run the checks from the repository root:

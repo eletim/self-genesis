@@ -15,3 +15,7 @@ affect_dim = 4
 entity_memory_dim = 16 # Set to 0 for the v0.0.5 architecture.
 episodes = 3
 learning_rate = 0.001
+
+# Thought architecture; shallow ignores the validated step count.
+thought_mode = "recurrent"
+think_steps = 16 # Integer >= 16; 32 and 64 reuse the same parameters.

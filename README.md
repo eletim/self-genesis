@@ -324,6 +324,16 @@ step. `RecurrentPolicy(..., think_steps=16)` is the default; integer counts of
 or Encounter time and preserves the training graph through every step.
 `thought_mode="shallow"` selects the original single Linear → tanh transform
 for comparison; `think_steps` remains validated but is unused in this mode.
+Configuration files use `thought_mode = "recurrent"` (or `"shallow"`) and
+`think_steps = 16`. CLI overrides `--thought-mode` and `--think-steps` apply to
+initialization, training, and comparison, alongside every capacity preset. For
+example, `--capacity-preset small --thought-mode recurrent --think-steps 64`
+uses the small network with 64 shared-core iterations. Both modes require an
+integer count of at least 16; shallow ignores that count. Saved experiment
+settings record the architecture and count, alongside actual network parameter
+counts in training and comparison metadata. Increasing recurrent steps does
+not add parameters.
+
 After the loop, a GRU updates memory once using final Thought and previous affect.
 New affect is generated from the observation, final Thought, and updated memory
 once, then feeds the next

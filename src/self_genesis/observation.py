@@ -90,7 +90,8 @@ class RunRecorder:
             parameter_count=network.parameter_count,
             policy_settings={name: getattr(network, name) for name in (
                 "appearance_dim", "vocabulary_size", "max_message_length",
-                "memory_dim", "affect_dim", "entity_memory_dim")},
+                "memory_dim", "affect_dim", "entity_memory_dim",
+                "thought_mode", "think_steps")},
             **_resources(collector.world),
             appearance=collector.world.state.appearance.tolist(),
             point_generation_probability=(

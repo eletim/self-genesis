@@ -865,6 +865,15 @@ Deterministic reference checks can be run with:
 python -m unittest discover -s tests -p 'test_batched*.py' -v
 ```
 
+Disjoint encounter pairs share four policy calls per world step: first messages,
+replies, first actions, then second actions. One completion call follows simultaneous
+world resolution, including participants that died or reached the horizon on that
+step. Decisions are routed by `[world, observer]` with active masks; the pair list
+retains consecutive first/second entries and `-1` padding. Each pair retains its
+own random draws from its world's stream, and each observer retains private
+recurrent and Entity Memory state. Pair selection consumes the existing per-pair
+random blocks; batching phases changes neither network capacity nor learning rules.
+
 The small-configuration reference coverage is split by responsibility:
 
 | Tests | Reference comparisons |

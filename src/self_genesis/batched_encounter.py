@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 import torch
 from torch.distributions import Categorical
 
+from self_genesis.batched_random import BatchedRandom
 from self_genesis.batched_policy import BatchedObservation, BatchedPolicyState
 from self_genesis.batched_world import BatchedStepResult, BatchedWorld
 from self_genesis.policy import RecurrentPolicy
@@ -43,8 +44,8 @@ class BatchedEncounterProtocol:
 
     State is supplied and returned explicitly, retaining recurrent graphs. The
     caller owns episode resets and optimizer detach boundaries. Each world's
-    isolated CPU RNG supplies uniforms; selection, routing and policy execution
-    use tensors on the world device. Streams persist across world/state resets.
+    isolated Philox stream supplies uniforms on the world device, alongside
+    selection, routing and policy execution. Streams persist across world/state resets.
     Seeds reproduce this executor, not the legacy Python random.sample stream.
     """
 
@@ -60,16 +61,10 @@ class BatchedEncounterProtocol:
             raise ValueError("Policy and world must share Appearance dimension and device")
         self.world = world
         self.network = network
-        self._generators = [torch.Generator().manual_seed(seed) for seed in seeds]
+        self._random = BatchedRandom(seeds, device=world.state.life.device)
 
     def _uniforms(self, active):
-        # Only random-number generation loops over worlds, never policy calls.
-        size = 4 + 2 * self.network.max_message_length
-        return torch.stack([
-            torch.rand(size, generator=generator, dtype=torch.float64)
-            if enabled else torch.zeros(size, dtype=torch.float64)
-            for generator, enabled in zip(self._generators, active.tolist())
-        ]).to(self.world.state.life.device)
+        return self._random.uniform(4 + 2 * self.network.max_message_length, active)
 
     @staticmethod
     def _select(living, uniforms):

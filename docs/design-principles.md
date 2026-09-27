@@ -168,9 +168,22 @@ world / Agent / slot番号、hidden trait、生成量、解析履歴、oracle情
 ## v0.0.9 のThought loop契約（Issue #70）
 
 [Issue #70](https://github.com/eletim/self-genesis/issues/70)では、単発の浅いThought変換を、
-同一Thought Coreによる自己再帰へ拡張する。以下は設計契約であり、この文書変更自体は
-実装完了や学習性能の改善を意味しない。変更対象は内部思考であり、renewable resource world、
+同一Thought Coreによる自己再帰へ拡張した。以下の契約はsequential / batched実装に反映され、
+CPU / CUDAのThoughtテストで検証されている。変更対象は内部思考であり、renewable resource world、
 Encounter density、Communicationとsurvival-onlyのActor-Criticは維持する。
+
+実装では`thought_mode = "recurrent"`を既定とし、比較専用の`"shallow"`は従来の
+単発Linear → tanhを保持する。以下の反復契約はrecurrentに適用する。
+shallowでも`think_steps`は16以上の整数として検証するが、計算回数には使用しない。
+第9節のObservation・記憶・感性の循環はcallback間で保ち、loop内ではContextを固定する。
+
+[実験workflow](scaled-experiment-workflow.md#reproduce-the-thought-experiments)から
+[計算性能](rtx5090-recurrent-thought.md)と[matched comparison](controlled-thought-comparison.md)を
+再現・検証できる。16 / 32 stepは全seedで同じ生存・援助・選択指標となり、
+shallowとの生存差は2 seedで正、1 seedで負だった。全学習policyがalways-GIVEを下回り、
+recurrentのEntity Memory resetによる生存差は全seedで0だった。
+実装契約の達成と、協力・相手別記憶の有用性という研究目標の達成は区別する。
+throughput、mixed-GIVE、内部状態の収束や履歴との相関だけでは後者を主張しない。
 
 ### Thought Stateの初期化と寿命
 

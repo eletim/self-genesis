@@ -14,13 +14,58 @@
 
 [Validated v0.0.6 Entity Memory comparison and reproduction](docs/entity-memory-experiment.md)
 
+## v0.0.9 Thought lifecycle and results
+
+The delivered default is a callback-local recurrent Thought loop: start at zero,
+apply the same Linear → ReLU core at least 16 times with fixed observation and
+private memory context, then update Working Memory and affect once. Entity Memory
+keeps its callback and encounter-completion writes. Thought resets for every
+message/action callback; persistent memories reset at episode boundaries. During
+thinking, world time, Life, Points, deaths, generation and reward are frozen.
+All pairs finish their choices before one simultaneous resource resolution and
+one world step. Full-episode gradients pass through every internal step; there
+is no early exit, extra decision reward or intermediate action sampling.
+
+Set TOML `thought_mode = "recurrent"` and `think_steps = 16`, or CLI
+`--thought-mode recurrent --think-steps 32` (also 64). Counts must be integers
+at least 16; booleans are rejected. `--thought-mode shallow` retains the original
+single tanh transform for comparisons and ignores the still-validated count.
+See the [policy details](#recurrent-agent-policy),
+[implemented scenarios](docs/representative-scenarios.md),
+and [reproduction workflow](docs/scaled-experiment-workflow.md#reproduce-the-thought-experiments).
+
+The [RTX 5090 benchmark](docs/rtx5090-recurrent-thought.md) completed all six
+small/FP32 cases at 64/128/256 worlds with finite full-episode gradients. At
+256 worlds and horizon 16, 16/32 steps measured **6,653.9 / 5,734.0 world steps/s**
+and **3.442 / 4.872 GiB** peak allocated memory. This short, single-seed sweep
+measures execution cost, not learning; 64-step throughput was not measured.
+
+The [matched three-seed comparison](docs/controlled-thought-comparison.md)
+used 50 updates × 128 worlds, 32 agents, 16 pairs and horizon 32. Both recurrent
+depths produced mean lifetimes **15.4688 / 15.4375 / 14.1146**, versus shallow's
+**14.2292 / 14.9167 / 15.2500**; all stayed below always-GIVE (**15.8021**).
+32 steps did not improve measured survival, aid or selection over 16. All learned
+policies were mixed-GIVE, with no held-out censoring. Entity Memory reset had
+zero recurrent survival effect; Appearance and Working Memory effects were small
+and mixed. Positive prior-aid and repeat-producer associations do not establish
+useful partner memory or cooperation. [Preselected Thought probes](docs/controlled-thought-dynamics.md)
+approached fixed points, which likewise does not demonstrate useful deliberation.
+
+These are bounded descriptive results from three training seeds and three held-out
+worlds, with equal episodes rather than equal compute or realized encounters.
+Shallow also differs in activation, initialization and parameter count. No
+untrained checkpoint comparison isolates learning from initialization. Throughput,
+mixed actions and token usage alone establish neither cooperation nor memory use.
+
 ## v0.0.7 scaled experiments
 
 Use the [scaled experiment workflow](docs/scaled-experiment-workflow.md) to
 reproduce capacity counts, compare throughput, and run held-out partner-history
-and Entity Memory analyses. Small, medium and large presets have **10,987**,
+and Entity Memory analyses. Historical shallow small, medium and large presets
+have **10,987**,
 **278,823** and **4,211,847** shared parameters at the default Appearance/channel
-dimensions. Batched training preserves the survival-only objective and private
+dimensions; current recurrent counts are **11,243**, **295,207** and **4,473,991**.
+Batched training preserves the survival-only objective and private
 agent state; sequential FP32 training remains the default.
 
 The retained RTX 5090 sweep completed all 33 cases across three capacities,

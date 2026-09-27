@@ -143,6 +143,7 @@ class BatchedEncounterTests(unittest.TestCase):
         self.assertEqual(world.steps.tolist(), [2, 2, 1, 0])
 
     def test_selection_is_uniform_ordered_living_and_streams_are_independent(self):
+        torch.manual_seed(8)
         living = torch.tensor([[True, False, True, True]]).expand(6000, -1)
         draws = torch.rand(6000, 2, generator=torch.Generator().manual_seed(5), dtype=torch.float64)
         pairs = BatchedEncounterProtocol._select(living, draws)
@@ -155,6 +156,8 @@ class BatchedEncounterTests(unittest.TestCase):
         single = BatchedWorld(config, seeds=[9])
         batch = BatchedEncounterProtocol(world, network, seeds=[18, 19])
         reference = BatchedEncounterProtocol(single, network, seeds=[19])
+        # Equal keys across worlds must still address private observer tables.
+        world.state.appearance[0].copy_(world.state.appearance[1])
         state = network.initial_batch_state(2, 4, slots=4)
         other = network.initial_batch_state(1, 4, slots=4)
         torch_rng, python_rng = torch.get_rng_state(), random.getstate()
@@ -171,7 +174,11 @@ class BatchedEncounterTests(unittest.TestCase):
                 for actual, wanted in zip(result.decisions, expected.decisions):
                     torch.testing.assert_close(actual.choice[1], wanted.choice[0])
                 torch.testing.assert_close(world.state.life[1], single.state.life[0])
-                torch.testing.assert_close(state.memory[1], other.memory[0])
+                for actual, expected in ((state.memory, other.memory), (state.affect, other.affect),
+                                         (state.entities.values, other.entities.values)):
+                    torch.testing.assert_close(actual[1], expected[0], atol=2e-6, rtol=2e-5)
+                self.assertTrue(torch.equal(state.entities.keys[1], other.entities.keys[0]))
+                self.assertTrue(torch.equal(state.entities.occupied[1], other.entities.occupied[0]))
         self.assertTrue(torch.equal(torch_rng, torch.get_rng_state()))
         self.assertEqual(python_rng, random.getstate())
         with self.assertRaises(ValueError):

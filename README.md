@@ -822,6 +822,43 @@ gradients with sequential callbacks; they also check masks, private gradients,
 reset/detach, disabled memory and empty channels. No throughput or learning
 improvement is claimed by these policy primitives.
 
+Deterministic reference checks can be run with:
+
+```bash
+python -m unittest discover -s tests -p 'test_batched*.py' -v
+```
+
+The small-configuration reference coverage is split by responsibility:
+
+| Tests | Reference comparisons |
+| --- | --- |
+| `test_batched_world.py` | Scalar `World` resource updates, simultaneous gifts, renewable Points, death, horizon precedence, frozen completed rows, and cumulative survival rewards. |
+| `test_batched_encounter.py` | Scalar `EncounterProtocol` observations, ordered messages/replies and GIVE/NOTHING actions, completion writes, recurrent state, and gradients; batch composition/reset isolation includes affect and all Entity Memory tensors. |
+| `test_batched_policy.py`, `test_batched_entity_memory.py` | Scalar policy and Appearance memory lookup/write results, repeated/colliding keys, inactive observers, disabled memory, reset/detach, and private recurrent/Entity Memory gradients. |
+| `test_batched_rollout.py` | Scalar loss reduction for both training methods, reward accounting for unselected/lone survivors, continuation, and gradients. |
+| `test_batched_training.py` | Independent scalar complete episodes, loss components, parameter gradients, and Adam updates. Covers extinction and finite horizons, empty/three-token channels, repeated updates, and renewable resources with successful/unaffordable GIVE and NOTHING. |
+
+Policy initialization uses fixed seeds in the numerical comparisons. World tests
+replay controlled generation uniforms for scalar survivors because the scalar
+and batched random streams deliberately differ. Encounter comparisons replay
+choices to isolate execution from sampling; the renewable training comparison
+also scripts scalar pairs and token/action samples independently of batched
+outputs. Endpoint uniforms select known tokens/actions, and alternating generation
+uniforms exercise both renewal outcomes. One world dies at step one while another
+reaches step five, checking normalization and rewards across unequal episodes.
+
+Resources, routing, discrete choices, masks, and integer-valued survival rewards
+must agree exactly. FP64 policy output/completion checks use `rtol=1e-9,
+atol=1e-10`; policy gradients use `1e-8, 1e-10` and Encounter gradients use
+`1e-7, 1e-9`. The renewable training comparison uses `rtol=2e-5, atol=2e-6`
+for loss components and `rtol=2e-4, atol=2e-6` for gradients/Adam parameters,
+matching the existing FP32 update tolerance: batched training intentionally
+accumulates losses in FP32 even with FP64 policy weights. Batch-composition state
+checks use `rtol=2e-5, atol=2e-6` for FP32 kernel roundoff. These are numerical
+equivalence checks, not requirements for bitwise equality across execution shapes.
+Device loops repeat reference comparisons on CUDA when available; CPU-only runs
+do not establish CUDA or BF16 parity (see the separate mixed-precision tests).
+
 
 ### Batched Encounter execution
 

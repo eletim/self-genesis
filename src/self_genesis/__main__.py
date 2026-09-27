@@ -28,6 +28,10 @@ def main() -> None:
         parser.add_argument("--" + name.replace("_", "-"), type=int)
     parser.add_argument("--batched", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--num-worlds", type=int)
+    parser.add_argument("--trace-worlds", type=int, nargs="*",
+                        help="Representative world indices to trace (default: none)")
+    parser.add_argument("--trace-update-interval", type=int)
+    parser.add_argument("--trace-step-interval", type=int)
     parser.add_argument("--mixed-precision", choices=("fp32", "bf16"),
                         help="Optional CUDA BF16 autocast for batched training (default: fp32)")
     parser.add_argument("--capacity-preset", choices=CAPACITY_PRESETS)

@@ -26,7 +26,7 @@ class RenewableIntegrationTests(unittest.TestCase):
                            '--initial-life', '4', '--initial-points', '1',
                            '--survival-horizon', str(horizon)]
                 log = directory / 'train.jsonl'
-                subprocess.run([sys.executable, '-m', 'self_genesis', 'train',
+                subprocess.run([sys.executable, '-m', 'self_genesis', 'train', '--trace-worlds', '0',
                                 *options, '--output', str(log)],
                                check=True, capture_output=True, text=True)
                 analyzed = subprocess.run([
@@ -36,7 +36,7 @@ class RenewableIntegrationTests(unittest.TestCase):
                 records = [json.loads(line) for line in log.read_text().splitlines()]
                 updates = []
                 for episode, row in enumerate(rows):
-                    events = [r for r in records if r['episode'] == episode]
+                    events = [r for r in records if r['episode'] == episode and r['type'] != 'measurement']
                     start, summary, update = events[0], events[-2], events[-1]
                     updates.append(update)
                     steps = events[1:-2]

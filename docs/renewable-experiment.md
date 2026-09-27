@@ -79,7 +79,7 @@ not be passed to `examples/analyze_run.py`.
 
 To inspect training and temporal histories, run the CPU/CUDA recipes in the run
 guide, or `train` with the same configuration/seed/episode count and a fresh
-`--output` JSONL path, then run `python examples/analyze_run.py PATH`. The comparison
+`--output` JSONL path and `--trace-worlds 0` (both trace intervals set to 1), then run `python examples/analyze_run.py PATH`. The comparison
 and training commands perform the same updates under matching settings. The
 integration test checks this directly. Raw `step` records retain generation and
 transfer histories; analyzer `relationship_actions` joins only earlier history

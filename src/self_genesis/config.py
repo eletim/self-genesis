@@ -39,6 +39,9 @@ class ExperimentConfig:
     mixed_precision: str = "fp32"
     num_worlds: int = 64
     deterministic: bool = False
+    trace_worlds: tuple[int, ...] = ()
+    trace_update_interval: int = 1
+    trace_step_interval: int = 1
 
     def __post_init__(self) -> None:
         for name in ("batched", "deterministic"):
@@ -51,6 +54,7 @@ class ExperimentConfig:
         if self.mixed_precision == "bf16" and not self.batched:
             raise ValueError("BF16 mixed_precision requires batched training")
         for name, minimum in (
+            ("trace_update_interval", 1), ("trace_step_interval", 1),
             ("num_worlds", 1), ("seed", 0), ("num_agents", 2), ("appearance_dim", 1),
             ("initial_life", 1), ("initial_points", 0),
             ("vocabulary_size", 1), ("max_message_length", 0),
@@ -60,6 +64,13 @@ class ExperimentConfig:
             value = getattr(self, name)
             if type(value) is not int or value < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
+        if not isinstance(self.trace_worlds, (tuple, list)) or any(
+                type(world) is not int or not 0 <= world < (self.num_worlds if self.batched else 1)
+                for world in self.trace_worlds):
+            raise ValueError("trace_worlds must contain valid world indices")
+        if len(set(self.trace_worlds)) != len(self.trace_worlds):
+            raise ValueError("trace_worlds must be unique")
+        object.__setattr__(self, "trace_worlds", tuple(self.trace_worlds))
         if self.survival_horizon is not None and (
                 type(self.survival_horizon) is not int or self.survival_horizon < 1):
             raise ValueError("survival_horizon must be a positive integer or None")

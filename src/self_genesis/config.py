@@ -36,6 +36,7 @@ class ExperimentConfig:
     action_entropy_coefficient: float = 0.01
     message_entropy_coefficient: float = 0.01
     batched: bool = False
+    mixed_precision: str = "fp32"
     num_worlds: int = 64
     deterministic: bool = False
 
@@ -45,6 +46,10 @@ class ExperimentConfig:
                 raise ValueError(f"{name} must be a boolean")
         if self.training_method not in ("actor_critic", "reinforce"):
             raise ValueError("training_method must be actor_critic or reinforce")
+        if self.mixed_precision not in ("fp32", "bf16"):
+            raise ValueError("mixed_precision must be fp32 or bf16")
+        if self.mixed_precision == "bf16" and not self.batched:
+            raise ValueError("BF16 mixed_precision requires batched training")
         for name, minimum in (
             ("num_worlds", 1), ("seed", 0), ("num_agents", 2), ("appearance_dim", 1),
             ("initial_life", 1), ("initial_points", 0),

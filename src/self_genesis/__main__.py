@@ -28,6 +28,8 @@ def main() -> None:
         parser.add_argument("--" + name.replace("_", "-"), type=int)
     parser.add_argument("--batched", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--num-worlds", type=int)
+    parser.add_argument("--mixed-precision", choices=("fp32", "bf16"),
+                        help="Optional CUDA BF16 autocast for batched training (default: fp32)")
     parser.add_argument("--capacity-preset", choices=CAPACITY_PRESETS)
     parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--learning-rate", type=float)

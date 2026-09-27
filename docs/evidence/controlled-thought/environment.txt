@@ -1,0 +1,9 @@
+name, uuid, driver_version, memory.total [MiB], power.limit [W]
+NVIDIA GeForce RTX 5090, GPU-1b281bf1-82be-b2e8-1650-caabbe127689, 595.91.07, 32607 MiB, 575.00 W
+Python: 3.12.14
+Platform: Linux-7.0.0-34-generic-x86_64-with-glibc2.43
+PyTorch: 2.7.1+cu128
+CUDA: 12.8
+TF32 matmul default: False
+Experiment CPU threads: 1; deterministic algorithms enabled by config
+CUBLAS_WORKSPACE_CONFIG=:4096:8; CUDA device numbering unchanged

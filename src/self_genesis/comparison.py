@@ -308,7 +308,8 @@ def _run_comparison(config, output, *, evaluation_seeds, training_seeds, interve
                     config.appearance_dim, vocabulary_size=config.vocabulary_size,
                     max_message_length=config.max_message_length,
                     memory_dim=config.memory_dim, affect_dim=config.affect_dim,
-                    entity_memory_dim=dimension).to(device)
+                    entity_memory_dim=dimension, thought_mode=config.thought_mode,
+                    think_steps=config.think_steps).to(device)
                 optimizer = torch.optim.Adam(network.parameters(), lr=config.learning_rate)
                 training_metadata = {}
                 if config.batched:

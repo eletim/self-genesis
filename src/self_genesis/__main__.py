@@ -24,7 +24,7 @@ def main() -> None:
                         help="Additional frozen learned-policy evaluation treatments")
     for name in ("num_agents", "appearance_dim", "initial_life", "initial_points",
                  "vocabulary_size", "max_message_length", "memory_dim", "affect_dim",
-                 "entity_memory_dim", "episodes", "survival_horizon"):
+                 "entity_memory_dim", "episodes", "survival_horizon", "think_steps"):
         parser.add_argument("--" + name.replace("_", "-"), type=int)
     density = parser.add_mutually_exclusive_group()
     density.add_argument("--encounter-count", type=int,
@@ -39,6 +39,8 @@ def main() -> None:
     parser.add_argument("--trace-step-interval", type=int)
     parser.add_argument("--mixed-precision", choices=("fp32", "bf16"),
                         help="Optional CUDA BF16 autocast for batched training (default: fp32)")
+    parser.add_argument("--thought-mode", choices=("recurrent", "shallow"),
+                        help="Thought architecture (default: recurrent; think-steps >= 16)")
     parser.add_argument("--capacity-preset", choices=CAPACITY_PRESETS)
     parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--learning-rate", type=float)

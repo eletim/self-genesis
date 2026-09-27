@@ -316,7 +316,8 @@ def _run_training(config: ExperimentConfig, output: Path) -> dict:
         config.appearance_dim, vocabulary_size=config.vocabulary_size,
         max_message_length=config.max_message_length,
         memory_dim=config.memory_dim, affect_dim=config.affect_dim,
-        entity_memory_dim=config.entity_memory_dim).to(device)
+        entity_memory_dim=config.entity_memory_dim,
+        thought_mode=config.thought_mode, think_steps=config.think_steps).to(device)
     optimizer = torch.optim.Adam(network.parameters(), lr=config.learning_rate)
     if config.batched:
         return _run_batched_training(config, output, network, optimizer)

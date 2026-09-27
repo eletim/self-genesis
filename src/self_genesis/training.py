@@ -212,21 +212,32 @@ def train_batch(collector: BatchedRolloutCollector,
     """
     config = collector.config
     budget = _training_budget(config)
+    device = next(collector.network.parameters()).device
+    _validate_mixed_precision(config, device)
     seeds = tuple(seeds)
     if (len(seeds) != collector.world.steps.numel()
             or any(type(seed) is not int or not 0 <= seed < 2**63 for seed in seeds)):
         raise ValueError("Provide one integer seed in [0, 2**63) per world")
     for world, seed in enumerate(seeds):
         collector.reset(world, seed=seed)
-    rollout = collector.collect(budget)
+    with torch.autocast(device_type=device.type, dtype=torch.bfloat16,
+                        enabled=config.mixed_precision == "bf16"):
+        rollout = collector.collect(budget)
     components = survival_loss_components(
         rollout, training_method=config.training_method,
         value_loss_coefficient=config.value_loss_coefficient,
         action_entropy_coefficient=config.action_entropy_coefficient,
         message_entropy_coefficient=config.message_entropy_coefficient)
     optimizer.zero_grad(set_to_none=True)
+    if not bool(torch.isfinite(components.loss)):
+        collector.detach()
+        raise ValueError("Non-finite batched training loss; optimizer update skipped")
     components.loss.backward()
     collector.detach()
+    gradients = [p.grad for p in collector.network.parameters() if p.grad is not None]
+    if not bool(torch.stack([torch.isfinite(grad).all() for grad in gradients]).all()):
+        optimizer.zero_grad(set_to_none=True)
+        raise ValueError("Non-finite batched training gradients; optimizer update skipped")
     optimizer.step()
     returns = torch.stack([item.reward for item in rollout.experiences]).float().sum(0)
     return BatchedTrainingResult(
@@ -235,6 +246,15 @@ def train_batch(collector: BatchedRolloutCollector,
         tuple(rollout.terminated.tolist()), tuple(rollout.horizon_completed.tolist()),
         config.training_method, components.actor_loss.item(), components.value_loss.item(),
         components.action_entropy.item(), components.message_entropy.item())
+
+
+def _validate_mixed_precision(config: ExperimentConfig, device: torch.device) -> None:
+    if config.mixed_precision == "bf16":
+        if device.type != "cuda":
+            raise ValueError("BF16 mixed_precision requires a CUDA device")
+        with torch.cuda.device(device):
+            if not torch.cuda.is_bf16_supported():
+                raise ValueError("BF16 mixed_precision is not supported on this CUDA device")
 
 
 def _training_budget(config: ExperimentConfig) -> int:
@@ -268,6 +288,7 @@ def _run_training(config: ExperimentConfig, output: Path) -> dict:
     """Run a fixed number of complete updates and persist observations to JSONL."""
     _training_budget(config)  # Validate before creating an output file.
     device = resolve_device(config.device)
+    _validate_mixed_precision(config, device)
     torch.manual_seed(config.seed)
     network = RecurrentPolicy(
         config.appearance_dim, vocabulary_size=config.vocabulary_size,

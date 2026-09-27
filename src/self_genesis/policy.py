@@ -158,16 +158,21 @@ class RecurrentPolicy(nn.Module):
         thought, memory, affect = self._recur(inputs, state.memory[active],
                                              state.affect[active], retrieved)
         next_memory, next_affect = state.memory.clone(), state.affect.clone()
-        next_memory[active], next_affect[active] = memory, affect
+        # Indexed writes require matching dtypes; keep persistent state in FP32
+        # even when eligible neural operations run under BF16 autocast.
+        next_memory[active], next_affect[active] = memory.to(next_memory), affect.to(next_affect)
         logits = inputs.new_zeros(*active.shape, self.vocabulary_size if communicating else 2)
         values = inputs.new_zeros(active.shape)
-        logits[active] = self.message_head(memory) if communicating else self.action_head(memory)
-        values[active] = self.value_head(memory).squeeze(-1)
+        head = self.message_head if communicating else self.action_head
+        logits[active] = head(memory).to(logits)
+        # Value regression is sensitive to rounding as survival returns grow.
+        with torch.autocast(device_type=inputs.device.type, enabled=False):
+            values[active] = self.value_head(memory.to(values)).squeeze(-1)
         entities = state.entities
         if self.entity_memory_dim:
             value = inputs.new_zeros(*active.shape, self.entity_memory_dim)
             value[active] = self.entity_update(
-                torch.cat((inputs, thought, memory, affect), dim=-1), retrieved)
+                torch.cat((inputs, thought, memory, affect), dim=-1), retrieved).to(value)
             entities = entities.write(observation.partner_appearance, value, active=active)
         return logits, values, BatchedPolicyState(next_memory, next_affect, entities)
 
@@ -193,7 +198,7 @@ class RecurrentPolicy(nn.Module):
         value = inputs.new_zeros(*active.shape, self.entity_memory_dim)
         value[active] = self.encounter_update(
             torch.cat((inputs, state.memory[active], state.affect[active], outcome), dim=-1),
-            state.entities.retrieve(observation.partner_appearance, active=active)[active])
+            state.entities.retrieve(observation.partner_appearance, active=active)[active]).to(value)
         return BatchedPolicyState(state.memory, state.affect, state.entities.write(
             observation.partner_appearance, value, active=active))
 

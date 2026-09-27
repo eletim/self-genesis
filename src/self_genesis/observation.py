@@ -80,6 +80,7 @@ class RunRecorder:
         self._write(
             "episode_start", settings=asdict(collector.config),
             resolved_device=str(collector.world.state.life.device),
+            parameter_count=network.parameter_count,
             policy_settings={name: getattr(network, name) for name in (
                 "appearance_dim", "vocabulary_size", "max_message_length",
                 "memory_dim", "affect_dim", "entity_memory_dim")},

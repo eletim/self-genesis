@@ -169,4 +169,5 @@ def run_training(config: ExperimentConfig, output: Path) -> dict:
             total_steps += result.steps
     return {"config": asdict(config), "resolved_device": str(device),
             "output": str(Path(output).resolve()), "episodes": config.episodes,
-            "total_steps": total_steps, "last_training": asdict(result)}
+            "total_steps": total_steps, "last_training": asdict(result),
+            "parameter_count": network.parameter_count}

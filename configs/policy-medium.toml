@@ -1,0 +1,4 @@
+# Medium capacity; other experiment settings retain API defaults.
+memory_dim = 128
+affect_dim = 32
+entity_memory_dim = 64

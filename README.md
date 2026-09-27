@@ -316,10 +316,18 @@ also accepts and returns explicit `PolicyState` tensors for inspection.
 
 Each communication or action callback encodes resources, partner Appearance,
 role, received message positions, available partner action, and callback phase.
-A thought layer consumes this observation plus previous memory, affect, and
-the retrieved Entity Memory value;
-a GRU updates memory using thought and previous affect. New affect is generated
-from the observation, thought, and updated memory, then feeds the next callback.
+These inputs, previous Working Memory, affect, and retrieved Entity Memory form
+fixed context for a callback-local Thought loop. Thought starts at zero and the
+same Linear → ReLU core consumes context and the previous Thought for every
+step. `RecurrentPolicy(..., think_steps=16)` is the default; integer counts of
+16 or greater (including 32 and 64) are supported. The loop advances no world
+or Encounter time and preserves the training graph through every step.
+`thought_mode="shallow"` selects the original single Linear → tanh transform
+for comparison; `think_steps` remains validated but is unused in this mode.
+After the loop, a GRU updates memory once using final Thought and previous affect.
+New affect is generated from the observation, final Thought, and updated memory
+once, then feeds the next
+callback. Thought itself is discarded; persistent memories are retained.
 Affect dimensions have no predefined meanings or supervised targets. No agent
 indices, self labels, or auxiliary classification objectives are added.
 
@@ -892,20 +900,21 @@ Call `detach()` only at an intentional training graph boundary.
 
 `RecurrentPolicy` shares the same weights and recurrent computation between
 sequential callbacks and `forward_batch`. The named capacities keep the existing
-architecture: one thought Linear, one Working Memory GRUCell, one circulating
-affect Linear, message/action/value Linear heads, and two Entity Memory GRUCells
+architecture: one shared recurrent Thought Linear with ReLU, one Working Memory
+GRUCell, one circulating affect Linear, message/action/value Linear heads, and
+two Entity Memory GRUCells
 (callback and resolved-encounter updates). Thought width equals Working Memory
 width. All presets retain all components; no extra observations or labels are
 introduced. The scalar critic reads the updated private Working Memory.
 
 Exact shared parameter counts at `appearance_dim=8`, `vocabulary_size=4`,
-`max_message_length=3` are:
+`max_message_length=3` in the default recurrent mode are:
 
 | Preset | Working Memory / thought | Affect | Entity Memory value | Parameters |
 | --- | ---: | ---: | ---: | ---: |
-| Small | 16 | 4 | 16 | 10,987 |
-| Medium | 128 | 32 | 64 | 278,823 |
-| Large | 512 | 128 | 256 | 4,211,847 |
+| Small | 16 | 4 | 16 | 11,243 |
+| Medium | 128 | 32 | 64 | 295,207 |
+| Large | 512 | 128 | 256 | 4,473,991 |
 
 Use `RecurrentPolicy.from_preset(8, "large")` or the configuration files
 `configs/policy-small.toml`, `configs/policy-medium.toml`, and

@@ -166,7 +166,7 @@ class BatchedPolicyTests(unittest.TestCase):
                                           state, communicating=True, active=~inactive)
 
     def test_capacity_presets_exact_counts_and_large_backward(self):
-        for name, expected in (("small", 10987), ("medium", 278823), ("large", 4211847)):
+        for name, expected in (("small", 11243), ("medium", 295207), ("large", 4473991)):
             config = load_config(Path(__file__).resolve().parents[1] / 'configs' / f'policy-{name}.toml')
             network = RecurrentPolicy.from_preset(config.appearance_dim, name)
             self.assertEqual((network.memory_dim, network.affect_dim, network.entity_memory_dim),

@@ -26,8 +26,59 @@ sequential execution and 64–1024 batched worlds, with FP32/BF16 batched traini
 At 256 worlds, FP32 measured 15,389–15,707 world steps/s versus 240–250 sequentially
 on the four-agent, horizon-16 workload. These are bounded execution measurements,
 not evidence of improved learning or social behavior. BF16 remains optional.
-`compare` trains and evaluates sequential policies; it does not load batched
-training JSONL. The behavioral evidence below predates the scaling work.
+`compare` defaults to sequential training; `compare --batched` trains batched
+policies and evaluates their frozen weights on explicit held-out seeds using
+the sequential FP32 evaluator. It does not load training JSONL. The behavioral
+evidence below predates the scaling work.
+
+## Batched-trained density evaluation
+
+Run a reproducible CPU smoke comparison with two training worlds per update:
+
+```sh
+python -m self_genesis compare --batched --deterministic --device cpu \
+  --num-worlds 2 --episodes 2 --num-agents 4 --encounter-fraction 1.0 \
+  --survival-horizon 8 --point-generation-probability-max 0.5 \
+  --training-seeds 7 17 --evaluation-seeds 101 102 \
+  --interventions entity-memory-reset appearance-shuffle appearance-replacement working-memory-reset \
+  --output /tmp/batched-density-comparison.json
+```
+
+Use a fresh output path on replay. `--encounter-count 2` can replace the fraction
+option. The configured density applies to both training and held-out evaluation;
+repeat with separate output files for other densities. `episodes` counts batched
+optimizer updates, each containing `num_worlds` complete episodes. Each enabled
+and disabled Entity Memory condition is independently trained with the existing
+batched collector, seed schedule, loss, and optimizer. The report retains those
+updates, resolved configs, and every update's `world_seeds`. Evaluation seeds are
+required and must exclude all training world seeds across every update and
+training seed (including seed wraparound).
+
+The actual trained networks stay in memory, are frozen, and enter the existing
+sequential FP32 evaluator with fresh agent state and matched baseline worlds.
+`training_execution` and `evaluation_execution` identify the two execution paths.
+Training may use supported CUDA BF16; evaluation uses FP32. Training JSONL remains
+observation data, not a checkpoint. This command reruns training rather than
+importing an earlier training log. Replays on the same software/device are the
+reproducibility target; batched and sequential RNG streams need not coincide.
+
+The report includes always-GIVE, always-NOTHING, and producer-oracle baselines,
+all requested interventions, censored survival summaries, first/repeat producer
+selection, prior-aid selection, and encounter exposure. `intervention_effects`
+contains matched lifetime, censoring, GIVE fraction, prior-aid GIVE difference,
+and repeat-minus-first producer difference deltas. Selection deltas remain null
+when a required bin is absent. These are descriptive effects: interventions can
+change later survival and encounters. Reward remains own survival only; producer
+ability and actual partner identity remain analysis/oracle-only information.
+The smoke budget establishes reproducibility, not learned social behavior.
+On CPU, the command above produced 52 evaluations from 16 training episodes.
+Every condition had mean observed lifetime 8, with all agents right-censored
+(the horizon is shorter than initial Life). For the enabled learned policies,
+pooled prior-aid GIVE differences were 0.020833 and 0.0 for training seeds 7 and
+17; repeat-minus-first producer differences were 0.05 and 0.033333. All four
+interventions had zero matched lifetime and selection deltas for these enabled
+policies. This short smoke run cannot distinguish survival performance or
+establish useful memory; use a longer horizon and training budget for that.
 
 ## v0.0.6 Entity Memory evidence
 

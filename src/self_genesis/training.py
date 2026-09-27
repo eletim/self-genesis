@@ -1,6 +1,7 @@
 """Complete-episode Actor-Critic or REINFORCE using only survival rewards."""
 
 from collections.abc import Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 import json
@@ -282,6 +283,13 @@ def _training_budget(config: ExperimentConfig) -> int:
 
 def run_training(config: ExperimentConfig, output: Path) -> dict:
     """Apply requested reproducibility controls and restore backend settings."""
+    with reproducible_execution(config):
+        return _run_training(config, output)
+
+
+@contextmanager
+def reproducible_execution(config: ExperimentConfig):
+    """Apply shared training/comparison backend controls for one run."""
     previous = torch.are_deterministic_algorithms_enabled()
     warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
     try:
@@ -293,7 +301,7 @@ def run_training(config: ExperimentConfig, output: Path) -> dict:
                                      "before CUDA initialization; restart with this environment setting")
                 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
         torch.use_deterministic_algorithms(config.deterministic)
-        return _run_training(config, output)
+        yield
     finally:
         torch.use_deterministic_algorithms(previous, warn_only=warn_only)
 

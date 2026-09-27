@@ -3,13 +3,16 @@
 These scenarios are durable examples of the behavior self-genesis is intended to study.
 They are not fixed expected outputs and should not be treated as hard-coded policies for the agents.
 The v0.0.4 resource rules follow the [Issue #15 design contract](design-principles.md),
-including its step order, and remain in force for v0.0.7.
+including its step order, and remain in force for v0.0.8.
 Appearance-keyed Entity Memory and completion writes are implemented and tested;
 the social interpretations in these scenarios remain hypotheses, not guaranteed
 learning outcomes. v0.0.7 adds capacity presets and batched execution without
 adding social rewards, identity labels or supervised meanings. Follow the
 [scaled experiment workflow](scaled-experiment-workflow.md) to distinguish
 validated mechanics, measured execution performance and held-out behavior.
+The [v0.0.8 density contract](design-principles.md) changes only the number of
+random disjoint encounters per world step. The density scenarios below specify
+that contract; they do not claim that multi-pair execution is already implemented.
 
 ## 1. 他者からのみLifeを回復できる
 
@@ -130,3 +133,62 @@ world数を増やすと1 updateで学習するepisode数も増えるため、
 未使用の評価seedで生存、相手別の過去の援助と次の行動、記憶への介入を比較する。
 null・mixed・常時GIVE・常時NOTHINGも観測結果として報告し、
 相関やlatent valueの変化だけを社会的意味の証拠にはしない。
+
+## 13. 密度を上げても相手と役割はランダム（v0.0.8）
+
+32体が生存しているworldでは、countを1 / 4 / 8 / 16とすると、
+1 stepにそれぞれ1 / 4 / 8 / 16 pair（2 / 8 / 16 / 32体）が参加する。
+未指定ならcount = 1である。各stepで生存集合から重複なしにランダムmatchingし、
+各pairの先手・後手もランダムに決める。AがBと組んだstepでは、AはCとはEncounterしない。
+次stepでAとBが再び組むことは可能だが、相手選別や再Encounterを環境が保証しない。
+
+countとfractionは同時に明示指定できない。fractionはそのstepの生存個体の参加割合で、
+pair数はfloor(fraction × 生存個体数 / 2)とする。端数を切り上げない。
+
+| 生存個体数 | 設定 | 実際のpair数 | 非参加個体数 |
+| --- | --- | --- | --- |
+| 32 | fraction = 0.5 | 8 | 16 |
+| 5 | fraction = 1 | 2 | 1 |
+| 5 | fraction = 0.5 | 1 | 3 |
+| 3 | fraction = 0.5 | 0 | 3 |
+| 5 | count = 16 | 2 | 1 |
+| 1 | count = 1（既定） | 0 | 1 |
+| 4 | count = 0 または fraction = 0 | 0 | 4 |
+| 0 | count = 1（既定） | 0 | 0 |
+
+count = 16のworldで生存数が32から5に減ると、pair数も16から2に制限される。
+fraction = 0.5なら同じ人口減少で8から1になる。死亡個体を補充参加させない。
+負のcount、count = 1.5、fraction = 1.1や非有限値は設定エラーとする。
+0 pairでも生存個体がいる未終了worldは通常の1 stepを進める。
+全員死亡やhorizon到達で終了済みなら、それ以降の時計・資源・Rewardは進めない。
+
+## 14. 複数pairのGIVEと資源時計は同じstepで解決する（v0.0.8）
+
+開始時にA / B / C / D / Eが生存し、Lifeは順に1 / 1 / 2 / 1 / 2、
+Pointは1 / 1 / 0 / 1 / 0とする。このstepのpairはA–BとC–D、Eは非参加とする。
+各pairでmessage → reply → first action → second actionを行い、4体ともGIVEを選ぶ。
+観測するLife / Pointは全pairで開始時の値とし、他pairの会話や選択結果は観測しない。
+
+AとBの相互GIVE、DからCへのGIVEが同時に成功し、CからDへのGIVEはPoint不足で失敗する。
+全開始時生存個体のLifeを1回だけ減らすと、Lifeは1 / 1 / 2 / 0 / 1となり、Dだけが死亡する。
+残存するA / B / C / Eがそれぞれ1回の生成抽選で1 Pointを得た場合、
+step後のPointは1 / 1 / 1 / 0 / 1となる。Cの新しいPointで失敗したGIVEをやり直さず、
+Dを復活させない。EもLife減少と生成の対象だが、架空のEncounter経験は持たない。
+
+死亡したDと非参加のEも含め、5体それぞれのsurvival Rewardは1である。
+pairが2つでも世界の時計とhorizonは1 stepだけ進み、生成抽選・Rewardを2回にしない。
+A–BとC–Dの処理順序を入れ替えても同じ資源結果となる。
+これは逐次referenceとbatched実行の両方で守る。
+
+## 15. 反復Encounterの増加と記憶利用を区別する（v0.0.8）
+
+密度を上げてAがBと再Encounterする機会が増えても、Bのidentityや生成能力を新しく教えない。
+Aは自分が観測したAppearance・資源・Communication・行動と、自分が当事者だったGIVEの
+成否だけからEntity Memoryを更新する。同じstepのC–Dの経験や解析ログは書き込まない。
+Working Memory・感性はEncounterをまたいで保持し、各個体・worldの状態を分離する。
+
+容量・NN構造・Actor-Critic係数・renewable resource・survival-only Rewardを揃えて密度を比較する。
+decision数によるlossの再正規化やsocial reward、補助教師信号を追加しない。
+同じ有限horizonで反復回数、生存、相手別履歴に依存する行動、Entity Memory resetや
+Appearanceへの介入の影響を調べる。生存だけが伸びる場合、記憶介入が無影響な場合、
+常時GIVE / NOTHINGに偏る場合も許容し、関係記憶や協力の獲得を必須結果にしない。

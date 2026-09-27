@@ -1,0 +1,20 @@
+# Predeclared fixed conditions; only encounter_count varies in the runner.
+seed = 10000
+device = "cuda"
+batched = true
+num_worlds = 128
+num_agents = 32
+capacity_preset = "small"
+mixed_precision = "fp32"
+deterministic = true
+episodes = 50
+survival_horizon = 32
+initial_life = 10
+initial_points = 3
+point_generation_probability_min = 0.1
+point_generation_probability_max = 0.3
+learning_rate = 0.001
+training_method = "actor_critic"
+value_loss_coefficient = 0.5
+action_entropy_coefficient = 0.01
+message_entropy_coefficient = 0.01

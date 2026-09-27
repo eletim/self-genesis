@@ -31,6 +31,8 @@ policies and evaluates their frozen weights on explicit held-out seeds using
 the sequential FP32 evaluator. It does not load training JSONL. The behavioral
 evidence below predates the scaling work.
 
+[Controlled multi-seed 1/4/8/16-pair comparison and retained evidence](docs/controlled-density-comparison.md)
+
 ## Batched-trained density evaluation
 
 Run a reproducible CPU smoke comparison with two training worlds per update:

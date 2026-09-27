@@ -53,7 +53,8 @@ def rollout_metrics(rollout, network):
             survival += target / len(rollout.experiences)
     actions, gives, error, decisions, message_entropy, action_entropy, messages = totals.tolist()
     norms = [p.grad.detach().float().norm() for p in network.parameters() if p.grad is not None]
-    return dict(mean_observed_survival=survival, give_rate=gives / actions if actions else None,
+    return dict(action_callbacks=int(actions), encounters=int(actions) // 2,
+                mean_observed_survival=survival, give_rate=gives / actions if actions else None,
                 value_error=error / decisions if decisions else None,
                 mean_action_entropy=action_entropy / actions if actions else None,
                 mean_message_entropy=message_entropy / messages if messages else None,

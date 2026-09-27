@@ -1,0 +1,122 @@
+{
+  "config": {
+    "seed": 10000,
+    "device": "cuda",
+    "num_agents": 32,
+    "encounter_count": 1,
+    "encounter_fraction": null,
+    "appearance_dim": 8,
+    "initial_life": 10,
+    "initial_points": 3,
+    "point_generation_probability_min": 0.1,
+    "point_generation_probability_max": 0.3,
+    "vocabulary_size": 4,
+    "max_message_length": 3,
+    "memory_dim": 16,
+    "affect_dim": 4,
+    "entity_memory_dim": 16,
+    "survival_horizon": 32,
+    "episodes": 50,
+    "learning_rate": 0.001,
+    "training_method": "actor_critic",
+    "value_loss_coefficient": 0.5,
+    "action_entropy_coefficient": 0.01,
+    "message_entropy_coefficient": 0.01,
+    "batched": true,
+    "mixed_precision": "fp32",
+    "num_worlds": 128,
+    "deterministic": true,
+    "trace_worlds": [],
+    "trace_update_interval": 1,
+    "trace_step_interval": 1
+  },
+  "training_seeds": [
+    10000,
+    20000,
+    30000
+  ],
+  "evaluation_seeds": [
+    100000,
+    100001,
+    100002
+  ],
+  "densities": [
+    1,
+    4,
+    8,
+    16
+  ],
+  "timeout_seconds_per_density": 900,
+  "python": "3.12.14",
+  "torch": "2.7.1+cu128",
+  "cuda": "12.8",
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "revision": "bd4f3e909eaf089820be8075b5f7712ee5c86254",
+  "runner_sha256": "7225f8afe91ddeb2ddab853768cb6fb6aa1dc27962a140affca53d0b2798fe4d",
+  "cases": [
+    {
+      "density": 1,
+      "command": [
+        "/tmp/self-genesis-verify-gpu/bin/python",
+        "/home/eletim/.local/share/agent-workflow-manager/worktrees/awm-run-self-genesis-fbf41fd534b4/examples/run_density_comparison.py",
+        "--worker",
+        "1",
+        "--output",
+        "/tmp/controlled-density/pairs-1.json"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "report_sha256": "0d2adc5c79cd0937414c76c0379110df524c25e6b4233bf3d2bc7a88cca1504c",
+      "elapsed_seconds_including_evaluation": 102.88435429299716
+    },
+    {
+      "density": 4,
+      "command": [
+        "/tmp/self-genesis-verify-gpu/bin/python",
+        "/home/eletim/.local/share/agent-workflow-manager/worktrees/awm-run-self-genesis-fbf41fd534b4/examples/run_density_comparison.py",
+        "--worker",
+        "4",
+        "--output",
+        "/tmp/controlled-density/pairs-4.json"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "report_sha256": "3c7bdb4e3b712eab7335382899b56acd7c1e062878751a1f76177bd697bf77c9",
+      "elapsed_seconds_including_evaluation": 167.60316505498486
+    },
+    {
+      "density": 8,
+      "command": [
+        "/tmp/self-genesis-verify-gpu/bin/python",
+        "/home/eletim/.local/share/agent-workflow-manager/worktrees/awm-run-self-genesis-fbf41fd534b4/examples/run_density_comparison.py",
+        "--worker",
+        "8",
+        "--output",
+        "/tmp/controlled-density/pairs-8.json"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "report_sha256": "f9eb6aba1de085c818a0aa9f242f57796401333e30d18d51515b94d7e710eecc",
+      "elapsed_seconds_including_evaluation": 245.85646841005655
+    },
+    {
+      "density": 16,
+      "command": [
+        "/tmp/self-genesis-verify-gpu/bin/python",
+        "/home/eletim/.local/share/agent-workflow-manager/worktrees/awm-run-self-genesis-fbf41fd534b4/examples/run_density_comparison.py",
+        "--worker",
+        "16",
+        "--output",
+        "/tmp/controlled-density/pairs-16.json"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "report_sha256": "01f9762911c4aa4e2172812cce8bcf14259f8173827c355a4f98b536ae47a0e0",
+      "elapsed_seconds_including_evaluation": 400.72119974100497
+    }
+  ]
+}

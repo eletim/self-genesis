@@ -136,6 +136,8 @@ class TrainingLoggingTests(unittest.TestCase):
                                loss.action_entropy.item() * 2 / len(decisions), places=5)
         self.assertEqual(metrics['give_rate'],
                          sum(d.choice == Action.GIVE for d in decisions) / len(decisions))
+        self.assertEqual(metrics['action_callbacks'], len(decisions))
+        self.assertEqual(metrics['encounters'], len(decisions) // 2)
         self.assertIsNone(metrics['mean_message_entropy'])
         expected = math.sqrt(sum(p.grad.double().square().sum().item()
                                  for p in network.parameters() if p.grad is not None))

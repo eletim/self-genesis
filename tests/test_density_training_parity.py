@@ -209,6 +209,8 @@ class DensityTrainingParityTests(unittest.TestCase):
                              actual.survival_returns[row])
             losses.append(survival_loss_components(rollout))
         self.assertEqual(encounter_count(rollouts[0], True), sum(counts))
+        self.assertEqual(actual.metrics["encounters"], sum(counts))
+        self.assertEqual(actual.metrics["action_callbacks"], 2 * sum(counts))
         for name in ('loss', 'actor_loss', 'value_loss', 'action_entropy', 'message_entropy'):
             expected = sum(getattr(loss, name) for loss in losses) / 2
             torch.testing.assert_close(torch.tensor(getattr(actual, name), dtype=torch.float64),

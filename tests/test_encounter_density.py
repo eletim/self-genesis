@@ -153,6 +153,8 @@ class EncounterDensityTests(unittest.TestCase):
                 result = train_episode(collector, optimizer)
             self.assertEqual(result.loss, 0)
             self.assertEqual(result.metrics['gradient_norm'], 0)
+            self.assertEqual(result.metrics['encounters'], 0)
+            self.assertEqual(result.metrics['action_callbacks'], 0)
             self.assertEqual(result.metrics['mean_observed_survival'], 2)
             self.assertEqual(optimizer.state, {})
             for key, value in network.state_dict().items():

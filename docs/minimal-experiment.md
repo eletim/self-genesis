@@ -6,7 +6,11 @@ a bounded token channel, scarce renewable Points, and survival-only Actor-Critic
 not add social rewards, identity labels, or auxiliary objectives. Current defaults
 also include 16-dimensional Entity Memory; set `--entity-memory-dim 0` for the
 v0.0.5 architecture. See the [v0.0.6 matched validation](entity-memory-experiment.md)
-for the current multi-seed procedure, retained evidence, and null/mixed findings.
+for the historical multi-seed procedure, retained evidence, and null/mixed findings.
+For v0.0.7 capacity selection, measured throughput, and new held-out analysis
+procedures, use the [scaled experiment workflow](scaled-experiment-workflow.md).
+Batched execution changes training throughput, not the survival task or evidence
+required to claim learned social behavior.
 
 For validated v0.0.5 comparison commands, retained reports, and findings, see
 [the matched learning experiment](matched-learning-experiment.md). Actor-Critic
@@ -61,7 +65,7 @@ python -m pip install 'torch==2.7.1' --index-url https://download.pytorch.org/wh
 python -m pip install 'numpy==2.2.6' -e .
 python -m pip check
 mkdir -p /tmp/self-genesis-runs
-python -m self_genesis train --config configs/default.toml \
+python -m self_genesis train --trace-worlds 0 --config configs/default.toml \
   --device cpu --seed 42 --episodes 2 --initial-life 3 --initial-points 1 \
   --survival-horizon 12 --training-method actor_critic \
   --output /tmp/self-genesis-runs/cpu.jsonl
@@ -104,7 +108,7 @@ torch.cuda.synchronize()
 print('CUDA forward/backward:', x.grad.tolist())
 PY
 mkdir -p /tmp/self-genesis-runs
-python -m self_genesis train --config configs/default.toml \
+python -m self_genesis train --trace-worlds 0 --config configs/default.toml \
   --device cuda --seed 42 --episodes 2 --initial-life 3 --initial-points 1 \
   --survival-horizon 12 --training-method actor_critic \
   --output /tmp/self-genesis-runs/rtx5090.jsonl
@@ -134,7 +138,7 @@ The producer oracle alone receives privileged partner ability; it is a heuristic
 not an optimal policy. Interventions preserve world rules and rewards and never
 retrain weights; memory reset retains affect and within-encounter updates.
 
-Comparison output is schema-v2 JSON, separate from training JSONL. Inspect
+Comparison output is schema-v3 JSON, separate from training JSONL. Inspect
 `training_runs`, `summaries`, and matched `intervention_effects` directly; do not
 pass comparison reports to `examples/analyze_run.py`. Summaries include censored
 survival, successful aid, prior-aid dependence, token usage, and seed-level GIVE
@@ -146,8 +150,9 @@ matched between methods; realized trajectories and compute can still differ.
 ## Analysis and verification
 
 `examples/analyze_run.py` is a standard-library example for complete CLI training
-files, schema version 1. It prints one JSON row per update with loss, individual
-survival returns, mean survival, deaths, action counts/ratios, token counts, and
+files with complete scalar traces, schema version 1. It prints one JSON row per
+update with loss, individual survival returns, mean survival, deaths, action
+counts/ratios, token counts, and
 final resources. It rejects unfinished training runs; it is not an analyzer for
 arbitrary truncated API rollouts. It streams raw records and retains the
 per-episode output, including action analysis rows, before printing.

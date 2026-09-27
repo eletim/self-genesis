@@ -3,9 +3,13 @@
 These scenarios are durable examples of the behavior self-genesis is intended to study.
 They are not fixed expected outputs and should not be treated as hard-coded policies for the agents.
 The v0.0.4 resource rules follow the [Issue #15 design contract](design-principles.md),
-including its step order, and remain in force for v0.0.6.
-The v0.0.6 Entity Memory examples follow the same design contract; they specify intended
-behavior, not completed implementation or guaranteed learning outcomes.
+including its step order, and remain in force for v0.0.7.
+Appearance-keyed Entity Memory and completion writes are implemented and tested;
+the social interpretations in these scenarios remain hypotheses, not guaranteed
+learning outcomes. v0.0.7 adds capacity presets and batched execution without
+adding social rewards, identity labels or supervised meanings. Follow the
+[scaled experiment workflow](scaled-experiment-workflow.md) to distinguish
+validated mechanics, measured execution performance and held-out behavior.
 
 ## 1. 他者からのみLifeを回復できる
 
@@ -111,3 +115,18 @@ Aが通常の観測と相互作用から得た経験だけで、ラベルなし�
 episodeが変わればAのEntity Memoryもresetし、前episodeや他個体の経験を引き継がない。
 Working Memoryと感性の循環、意味を事前定義しないCommunication、ランダムなEncounter、
 Point再生成、survival-onlyのActor-Criticは引き続き維持する。
+
+## 12. 容量・並列world数と社会的行動を区別する（v0.0.7）
+
+small / medium / largeはWorking Memory・感性・Entity Memoryの幅を変える。
+同じshared weightsを使っても、各world・各Agentの内部状態と記憶は独立する。
+world番号・Agent番号・Entity Memoryのslot番号をpolicyの入力にはしない。
+並列化しても各world内ではmessage、reply、first action、second action、
+同時GIVE、Life減少・死亡判定、Point生成の順序を維持する。
+
+world数を増やすと1 updateで学習するepisode数も増えるため、
+同じupdate数や高いsteps/sだけでは学習の優位を示せない。
+大きなpolicyで返報・協力・有用なCommunicationが生まれると仮定せず、
+未使用の評価seedで生存、相手別の過去の援助と次の行動、記憶への介入を比較する。
+null・mixed・常時GIVE・常時NOTHINGも観測結果として報告し、
+相関やlatent valueの変化だけを社会的意味の証拠にはしない。

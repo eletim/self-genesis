@@ -295,7 +295,8 @@ def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=N
                 optimizer = torch.optim.Adam(network.parameters(), lr=config.learning_rate)
                 updates = [asdict(train_episode(collector, optimizer)) for _ in range(config.episodes)]
                 training_runs.append(dict(seed=learning_config.seed, policy=name,
-                                          config=asdict(learning_config), updates=updates))
+                                          config=asdict(learning_config), updates=updates,
+                                          parameter_count=network.parameter_count))
                 network.eval()
                 learned.append((name, network))
             for condition in conditions:

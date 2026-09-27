@@ -5,7 +5,7 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 
-from self_genesis.config import load_config
+from self_genesis.config import CAPACITY_PRESETS, load_config
 from self_genesis.comparison import INTERVENTIONS, run_comparison
 from self_genesis.experiment import initialize
 from self_genesis.training import run_training
@@ -26,6 +26,16 @@ def main() -> None:
                  "vocabulary_size", "max_message_length", "memory_dim", "affect_dim",
                  "entity_memory_dim", "episodes", "survival_horizon"):
         parser.add_argument("--" + name.replace("_", "-"), type=int)
+    parser.add_argument("--batched", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--num-worlds", type=int)
+    parser.add_argument("--trace-worlds", type=int, nargs="*",
+                        help="Representative world indices to trace (default: none)")
+    parser.add_argument("--trace-update-interval", type=int)
+    parser.add_argument("--trace-step-interval", type=int)
+    parser.add_argument("--mixed-precision", choices=("fp32", "bf16"),
+                        help="Optional CUDA BF16 autocast for batched training (default: fp32)")
+    parser.add_argument("--capacity-preset", choices=CAPACITY_PRESETS)
+    parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--learning-rate", type=float)
     parser.add_argument("--training-method", choices=("actor_critic", "reinforce"))
     parser.add_argument("--value-loss-coefficient", type=float)
@@ -49,6 +59,8 @@ def main() -> None:
         overrides.pop(key)
     try:
         config = load_config(args.config, **overrides)
+        if config.batched and args.command != "train":
+            raise ValueError("batched mode is only supported for train")
         if args.command == "compare":
             result = run_comparison(config, args.output, evaluation_seeds=args.evaluation_seeds,
                                     training_seeds=args.training_seeds,

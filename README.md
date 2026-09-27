@@ -2,6 +2,8 @@
 
 [Canonical design principles](docs/design-principles.md)
 
+[Measured RTX 5090 training scaling](docs/rtx5090-scaling.md)
+
 [Runnable CPU and RTX 5090 experiments, analysis, and validation](docs/minimal-experiment.md)
 
 [Historical v0.0.4 renewable comparison and observed behavior](docs/renewable-experiment.md)
@@ -9,6 +11,23 @@
 [Validated v0.0.5 matched Actor-Critic versus REINFORCE evidence](docs/matched-learning-experiment.md)
 
 [Validated v0.0.6 Entity Memory comparison and reproduction](docs/entity-memory-experiment.md)
+
+## v0.0.7 scaled experiments
+
+Use the [scaled experiment workflow](docs/scaled-experiment-workflow.md) to
+reproduce capacity counts, compare throughput, and run held-out partner-history
+and Entity Memory analyses. Small, medium and large presets have **10,987**,
+**278,823** and **4,211,847** shared parameters at the default Appearance/channel
+dimensions. Batched training preserves the survival-only objective and private
+agent state; sequential FP32 training remains the default.
+
+The retained RTX 5090 sweep completed all 33 cases across three capacities,
+sequential execution and 64–1024 batched worlds, with FP32/BF16 batched training.
+At 256 worlds, FP32 measured 15,389–15,707 world steps/s versus 240–250 sequentially
+on the four-agent, horizon-16 workload. These are bounded execution measurements,
+not evidence of improved learning or social behavior. BF16 remains optional.
+`compare` trains and evaluates sequential policies; it does not load batched
+training JSONL. The behavioral evidence below predates the scaling work.
 
 ## v0.0.6 Entity Memory evidence
 
@@ -429,7 +448,8 @@ does not imply extinction or make `mean_survival_time` available.
 Agent and episode numbers are logging keys only and never enter policy inputs.
 Generation abilities, generation outcomes, and transfer events are analysis-only
 fields and are not added to policy observations.
-The `train` command also records these observations automatically.
+The `train` command records aggregate diagnostics automatically; use
+`--trace-worlds 0` to include full scalar observations.
 
 ## Configurable training command
 
@@ -467,7 +487,7 @@ determinism; CPU and CUDA training need not match.
 directory. Existing results are never overwritten. Stdout reports JSON with the
 absolute results path, effective settings, resolved device, completed episode
 count, total steps, and last update. The JSONL file contains all episode settings,
-observations, summaries, and learning metrics described above. Training attaches
+summaries and learning metrics described above, plus observations when tracing is enabled. Training attaches
 the recorder after collector construction, so only the requested episodes are
 recorded, numbered from zero, each with a summary and training result. Read it with
 `json.loads(line)` for each line. It is observation data, not a model checkpoint.
@@ -578,7 +598,7 @@ done
 
 This two-update smoke run is not the recorded 100-update experiment. Use the
 [Entity Memory reproduction procedure and retained report](docs/entity-memory-experiment.md)
-for the current validated findings. The historical
+for the historical v0.0.6 validated findings. The historical
 [learning-method comparison](docs/matched-learning-experiment.md#reproduction-and-retained-evidence)
 requires its recorded checkout. Keep all conditions except `--training-method` matched;
 REINFORCE ignores the value/entropy coefficients.
@@ -677,3 +697,392 @@ comparisons. World initialization and sampling streams restart identically for
 each evaluation; changed actions can subsequently change resources, survivors,
 encounters, and generation draws. Reports contain the treatment and metric
 semantics needed to interpret these differences, without adding policy inputs.
+
+The resource-only `BatchedWorld` API runs independent worlds with tensor state;
+policy, encounter, and training collection continue to use the existing APIs.
+Supply an explicit seed per world. Life, Points, and generation probabilities
+have shape `[world, agent]`; Appearance has shape `[world, agent, feature]`.
+
+```python
+import torch
+from self_genesis.batched_world import BatchedWorld
+from self_genesis.config import ExperimentConfig
+
+worlds = BatchedWorld(
+    ExperimentConfig(num_agents=2, survival_horizon=10), seeds=[41, 42]
+)
+# -1 is NOTHING; other entries are same-world GIVE recipient indices.
+result = worlds.step(torch.tensor([[1, 0], [-1, -1]], device=worlds.state.life.device))
+worlds.reset(0, seed=43)  # reset only this world's episode and random streams
+```
+
+`step` requires int64 targets on the state device and validates them before
+mutation. Gifts resolve simultaneously before decay and survivor-only Point
+regeneration. Rewards are per-agent living steps, without a GIVE bonus.
+`terminated` marks extinction; `horizon_completed` marks a horizon reached with
+survivors. Extinction on the horizon takes precedence. Completed rows freeze,
+return zero new rewards/transfers/generation, and retain their completion flags
+until reset. `successful_transfers` is a boolean `[world, donor]` mask whose
+recipients are the input targets. Initialization matches each seed's sequential
+`World`. Device-side Philox streams supply regeneration uniforms independently
+of batch ordering or other worlds' deaths and resets. The batched generator
+consumes a full agent row per active step, masking out dead agents; its draws
+do not match the sequential survivor-only PyTorch RNG. Controlled-uniform tests
+verify the shared resource semantics.
+
+`BatchedEntityMemory` in `self_genesis.entity_memory` provides the corresponding
+Appearance-keyed memory storage primitive. Keys have shape
+`[world, observer, slot, appearance]`, values `[world, observer, slot, value]`,
+and occupancy `[world, observer, slot]`. It is used by the batched policy API
+below, the batched encounter executor, and the tensor trajectory collector.
+
+Create it with `BatchedEntityMemory.empty(worlds, observers, slots, appearance_dim,
+value_dim, device=..., dtype=...)`, reserving enough slots for each observer's
+distinct partners. `retrieve(appearance, active=mask)` and
+`write(appearance, value, active=mask)` accept one observed Appearance per
+world/observer, with an optional boolean `[world, observer]` participation mask.
+Unseen/inactive reads return zero; inactive writes preserve state. Equal
+Appearances share one entry, irrespective of partner identity. New keys in a
+full table raise an error; existing entries can still be updated. A zero value
+dimension disables storage.
+
+Writes return new state and preserve gradients through learned values and
+previous encounters. Assign their result back to the memory variable. At each
+episode boundary, also assign `memory = memory.reset(completed_worlds)` using a
+boolean `[world]` mask alongside the world reset. This clears selected worlds'
+keys and values while preserving ongoing worlds and their gradient history.
+Call `detach()` only at an intentional training graph boundary.
+
+### Batched policy forwards and capacity presets
+
+`RecurrentPolicy` shares the same weights and recurrent computation between
+sequential callbacks and `forward_batch`. The named capacities keep the existing
+architecture: one thought Linear, one Working Memory GRUCell, one circulating
+affect Linear, message/action/value Linear heads, and two Entity Memory GRUCells
+(callback and resolved-encounter updates). Thought width equals Working Memory
+width. All presets retain all components; no extra observations or labels are
+introduced. The scalar critic reads the updated private Working Memory.
+
+Exact shared parameter counts at `appearance_dim=8`, `vocabulary_size=4`,
+`max_message_length=3` are:
+
+| Preset | Working Memory / thought | Affect | Entity Memory value | Parameters |
+| --- | ---: | ---: | ---: | ---: |
+| Small | 16 | 4 | 16 | 10,987 |
+| Medium | 128 | 32 | 64 | 278,823 |
+| Large | 512 | 128 | 256 | 4,211,847 |
+
+Use `RecurrentPolicy.from_preset(8, "large")` or the configuration files
+`configs/policy-small.toml`, `configs/policy-medium.toml`, and
+`configs/policy-large.toml`. These files set only the three capacity dimensions;
+other settings use the existing experiment defaults. Existing CLI dimension
+flags override them, for example:
+
+```bash
+python -m self_genesis train --config configs/policy-large.toml \
+  --device auto --episodes 1 --survival-horizon 10 --output large.jsonl
+```
+
+Python preset construction also accepts explicit dimension/channel overrides.
+`network.parameter_count` computes the actual count after those overrides,
+excluding per-agent state. Training summaries, recorded episode starts, and
+comparison training runs report that count alongside the configured dimensions.
+Changing Appearance/channel dimensions or disabling Entity Memory changes the
+count. Capacity selection does not change the existing sequential trainer into
+a batched trainer.
+
+```python
+import torch
+from self_genesis.batched_policy import BatchedObservation
+from self_genesis.policy import RecurrentPolicy
+
+network = RecurrentPolicy.from_preset(8, "large")
+state = network.initial_batch_state(2, 4, slots=4)
+observation = BatchedObservation(
+    resources=torch.ones(2, 4, 4),  # own Life/Points, partner Life/Points
+    partner_appearance=torch.zeros(2, 4, 8),  # observed Appearance, never an ID
+    first=torch.ones(2, 4, dtype=torch.bool),
+    received_message=torch.full((2, 4, 3), 4, dtype=torch.int64),
+    partner_action=torch.zeros(2, 4, dtype=torch.int64),
+)
+active = torch.tensor([[True, False, False, False], [False, True, False, False]])
+logits, values, state = network.forward_batch(
+    observation, state, communicating=True, active=active)
+print(network.parameter_count)  # 4211847
+```
+
+All observations and masks must be on the policy device; Appearance and state
+use its floating dtype. `partner_action` uses 0=unknown, 1=NOTHING, 2=GIVE.
+Message tensors contain ordered tokens with a suffix padded by `vocabulary_size`.
+Each call batches only the current callback phase across `[world, observer]`.
+The caller must preserve communication and first/second action ordering, exposing
+only actions already visible at that phase. World/observer indices route state;
+they are never network features or Entity Memory keys.
+
+Logits have shape `[world, observer, vocabulary_size]` during communication and
+`[world, observer, 2]` during action selection; values have shape
+`[world, observer]`. Inactive rows return zero outputs and preserve all state.
+Sample only active rows; a zero-length channel produces no message decision,
+although its callback still updates recurrent state, as in the sequential API.
+
+After gifts resolve, call `complete_encounter_batch(observation, state,
+action=actions, gave=gave, received=received, active=active)` and retain its result.
+Here `actions` is int64 (0=NOTHING, 1=GIVE), gift outcomes are boolean, and all three
+have shape `[world, observer]`. The observation may now reveal the partner's final
+action. Completion updates only Appearance memory, without advancing Working
+Memory or affect. Equal Appearances share entries. Reserve sufficient entity
+slots for all distinct partners; overflow raises rather than evicting memories.
+
+Use `state = state.reset(completed_worlds)` with a boolean `[world]` mask at episode
+boundaries, and `state = state.detach()` only at an explicit optimizer boundary. Updates
+preserve old states and recurrent gradients across encounters and callbacks.
+CPU/CUDA parity tests compare batched outputs, completion writes and parameter
+gradients with sequential callbacks; they also check masks, private gradients,
+reset/detach, disabled memory and empty channels. No throughput or learning
+improvement is claimed by these policy primitives.
+
+Deterministic reference checks can be run with:
+
+```bash
+python -m unittest discover -s tests -p 'test_batched*.py' -v
+```
+
+The small-configuration reference coverage is split by responsibility:
+
+| Tests | Reference comparisons |
+| --- | --- |
+| `test_batched_world.py` | Scalar `World` resource updates, simultaneous gifts, renewable Points, death, horizon precedence, frozen completed rows, and cumulative survival rewards. |
+| `test_batched_encounter.py` | Scalar `EncounterProtocol` observations, ordered messages/replies and GIVE/NOTHING actions, completion writes, recurrent state, and gradients; batch composition/reset isolation includes affect and all Entity Memory tensors. |
+| `test_batched_policy.py`, `test_batched_entity_memory.py` | Scalar policy and Appearance memory lookup/write results, repeated/colliding keys, inactive observers, disabled memory, reset/detach, and private recurrent/Entity Memory gradients. |
+| `test_batched_rollout.py` | Scalar loss reduction for both training methods, reward accounting for unselected/lone survivors, continuation, and gradients. |
+| `test_batched_training.py` | Independent scalar complete episodes, loss components, parameter gradients, and Adam updates. Covers extinction and finite horizons, empty/three-token channels, repeated updates, and renewable resources with successful/unaffordable GIVE and NOTHING. |
+
+Policy initialization uses fixed seeds in the numerical comparisons. World tests
+replay controlled generation uniforms for scalar survivors because the scalar
+and batched random streams deliberately differ. Encounter comparisons replay
+choices to isolate execution from sampling; the renewable training comparison
+also scripts scalar pairs and token/action samples independently of batched
+outputs. Endpoint uniforms select known tokens/actions, and alternating generation
+uniforms exercise both renewal outcomes. One world dies at step one while another
+reaches step five, checking normalization and rewards across unequal episodes.
+
+Resources, routing, discrete choices, masks, and integer-valued survival rewards
+must agree exactly. FP64 policy output/completion checks use `rtol=1e-9,
+atol=1e-10`; policy gradients use `1e-8, 1e-10` and Encounter gradients use
+`1e-7, 1e-9`. The renewable training comparison uses `rtol=2e-5, atol=2e-6`
+for loss components and `rtol=2e-4, atol=2e-6` for gradients/Adam parameters,
+matching the existing FP32 update tolerance: batched training intentionally
+accumulates losses in FP32 even with FP64 policy weights. Batch-composition state
+checks use `rtol=2e-5, atol=2e-6` for FP32 kernel roundoff. These are numerical
+equivalence checks, not requirements for bitwise equality across execution shapes.
+Device loops repeat reference comparisons on CUDA when available; CPU-only runs
+do not establish CUDA or BF16 parity (see the separate mixed-precision tests).
+
+
+### Batched Encounter execution
+
+`BatchedEncounterProtocol` connects `BatchedWorld` and `RecurrentPolicy` without
+per-agent Python policy callbacks:
+
+```python
+from self_genesis.batched_encounter import BatchedEncounterProtocol
+from self_genesis.batched_world import BatchedWorld
+from self_genesis.config import ExperimentConfig
+from self_genesis.policy import RecurrentPolicy
+
+config = ExperimentConfig(device="cpu")
+world = BatchedWorld(config, seeds=[10, 20])
+network = RecurrentPolicy(config.appearance_dim)
+protocol = BatchedEncounterProtocol(world, network, seeds=[30, 40])
+state = network.initial_batch_state(2, config.num_agents, slots=config.num_agents)
+result = protocol.step(state)
+state = result.state
+```
+
+Each unfinished world with at least two survivors selects one uniform ordered
+living pair. Four batched phases preserve message, reply, first action and second
+action order. Only the second action sees the first action; completion reveals
+both final actions and successful transfers to the participants. Completion uses
+pre-step resources, messages and observed Appearance, including for participants
+who die at resolution. Unselected agents retain their state. Lone survivors
+advance time without policy decisions; completed worlds remain frozen.
+
+`result.pairs` contains routing indices (`-1` for no encounter), never policy
+features. `result.decisions` holds the four phase observations, active masks,
+choices and differentiable log probabilities, values and entropies; an entirely
+inactive batch returns no phases. Empty channels still update recurrence but
+have no sampled statistics. `result.world` contains the resource transition.
+These records retain graphs without accumulating history inside the executor.
+
+Per-world seeded device-side Philox streams feed tensor selection and sampling
+on the world device, without consuming global RNG state. Changing or resetting another
+world does not change a world's stream. These streams reproduce batched runs,
+not the legacy Python encounter RNG sequence. Reset world resources with
+`world.reset(row, seed=...)` and recurrent/entity state with `state = state.reset(mask)`;
+encounter streams continue across resets. Use `state = state.detach()` only at an optimizer
+boundary. This executor does not change the existing sequential training CLI.
+
+
+### Batched survival trajectories
+
+`BatchedRolloutCollector` owns the tensor world, encounter executor, and independent
+recurrent state for each world and agent. Collection budgets return segments;
+join consecutive segments to retain the entire survival objective and graph:
+
+```python
+from self_genesis.batched_rollout import BatchedRolloutCollector
+from self_genesis.training import survival_policy_loss
+
+collector = BatchedRolloutCollector(config, network, seeds=[11, 22])
+rollout = collector.collect(32)
+while bool(rollout.truncated.any()):
+    rollout = rollout.extend(collector.collect(32))
+optimizer.zero_grad(set_to_none=True)
+survival_policy_loss(rollout).backward()
+collector.detach()
+optimizer.step()
+```
+
+Use a finite `survival_horizon` for renewable worlds. Finished rows freeze while
+other worlds continue. Rewards include unselected agents and lone survivors;
+horizon completion is distinct from death. The existing survival loss functions
+accept tensor rollouts and average the per-world objectives, each normalized by
+its starting agent count. They reject incomplete budgets and segments missing
+step zero. Joining requires contiguous segments from the same collector and
+episodes. Empty channels have no message loss but still advance recurrence.
+
+After consuming the objective, `reset(world, seed=...)` clears one world's
+resources and recurrent state while preserving other rows and their graphs.
+Encounter sampling streams persist through reset. No collection call implicitly
+detaches state or updates weights, and `detach()` rejects unfinished objectives.
+Reset every row before collecting the next full batch for a shared-weight update.
+This API does not change the existing scalar training command.
+
+### Batched optimizer updates
+
+`train_batch` resets all rows, collects complete episodes under unchanged shared
+weights, then performs one optimizer update using the existing batched survival
+loss. Pass one reset seed per world; encounter sampling streams persist across
+calls. Renewable training requires an explicit `survival_horizon`.
+
+```python
+from self_genesis.training import train_batch
+
+optimizer = torch.optim.Adam(network.parameters(), lr=config.learning_rate)
+for _ in range(config.episodes):
+    result = train_batch(collector, optimizer, seeds=[11, 22])
+```
+
+Actor-Critic uses each agent's undiscounted survival return, detached advantages,
+value regression, and separately configured action and message entropy bonuses.
+Each world's loss is normalized by its starting agent count and averaged across
+worlds, including worlds that finish early. REINFORCE remains supported through
+`config.training_method`. Recurrent and entity-memory graphs span the complete
+objective and are detached before weights change. Results contain plain Python
+values: aggregate loss components, steps and ending flags by world, and survival
+returns indexed by world then agent. The training CLI can select this batched
+path as described below.
+
+
+### Batched training command
+
+```sh
+python -m self_genesis train --batched --num-worlds 64 --capacity-preset small \
+  --device auto --seed 42 --deterministic --episodes 3 \
+  --survival-horizon 8 --output batched-run.jsonl
+```
+
+Optional CUDA BF16 autocast is available with `--mixed-precision bf16` (or
+`mixed_precision = "bf16"` in TOML) together with `--batched --device cuda`.
+`--device auto` also works when it resolves to a BF16-capable CUDA device;
+CPU and unsupported CUDA devices are rejected before creating output.
+FP32 remains the default (`--mixed-precision fp32`). Eligible policy operations
+use BF16 while parameters, optimizer state, recurrent/Entity Memory storage,
+value-head evaluation, probability/entropy calculations, reward accumulation,
+advantages and loss reductions remain FP32. Backward and optimizer updates run
+outside autocast; non-finite losses or gradients abort the update. BF16 uses no
+FP16 loss scaler. The selected precision is recorded in the run configuration.
+
+The mixed-precision tests compare finite losses and parameter gradients against
+FP32 on matched discrete trajectories, including repeated updates, Entity Memory,
+zero-length messages and 32-step survival horizons. Run them on CUDA hardware
+with `python -m unittest discover -s tests -p test_mixed_precision.py -v`.
+These bounded comparisons do not establish stability for all capacities or long
+survival horizons; validate representative runs against FP32 before considering
+a change to the default. Identical seeds need not produce identical trajectories
+across precisions when rounding changes a sampled decision.
+
+Use `configs/batched.toml` for equivalent reusable settings. Sequential training
+remains the default; `--no-batched` selects it explicitly. In batched mode,
+`episodes` counts complete batch updates: three updates with 64 worlds train
+192 episodes. Each update averages the complete world objectives and updates
+one shared policy. `num_worlds` defaults to 64 and accepts any positive integer;
+64–256 are practical starting counts, with no fixed-size limit at 512–1024.
+Actual memory use depends on policy capacity, agent count and full episode length.
+
+`capacity_preset` in TOML or `--capacity-preset small|medium|large` selects the
+existing policy widths. A CLI preset overrides the TOML preset; explicit width
+settings in TOML override preset defaults, and CLI widths override both.
+`seed`, `device`, `deterministic`, `batched`, and `num_worlds` are also TOML settings.
+`--deterministic` enables PyTorch deterministic algorithms during training and
+sets the CUDA workspace configuration when unset before CUDA initialization;
+unsupported deterministic operations raise an error. For an existing Python
+process that has already used CUDA, start the process with
+`CUBLAS_WORKSPACE_CONFIG=:4096:8` in its environment. `--no-deterministic` disables this requirement.
+Backend algorithm settings are restored after the run.
+
+Each world starts with seed `(seed + world_index) % 2**63`. Update `u` resets
+resources with `(seed + u * num_worlds + world_index) % 2**63`; encounter/policy
+streams persist across updates. Regeneration uses a separate Philox stream.
+The Philox4x32-10 uniforms are generated in batched tensor operations on the
+selected device, consume four-value blocks, and match across CPU/CUDA. Inactive
+worlds do not advance their streams. Policy floating-point results and training
+need not match across devices or software versions.
+
+Batched JSONL contains one `batch_run` record with resolved settings, device,
+parameter count, RNG algorithm and initial encounter seeds, followed by one
+`batch_training` record per update. Each update records reset seeds, losses,
+steps and completion flags indexed by world, and survival returns indexed by
+world then agent. By default this compact format does not contain detailed encounter traces
+and is not input for the scalar `examples/analyze_run.py` tool. The final CLI
+JSON reports update count, total world episodes and total world steps.
+
+### Training diagnostics and sampled traces
+
+Training defaults to aggregate records without detailed traces. Every update
+includes loss components and `metrics`: mean observed survival (including
+horizon-censored agents), GIVE choices divided by all action choices (not
+successful transfers), mean squared value error against undiscounted survival
+reward-to-go per sampled decision, mean action/message entropy in nats per
+sampled decision, and the global L2 gradient norm before the optimizer step.
+Message entropy is for the whole message. An empty message channel has a null
+mean entropy. REINFORCE still reports these diagnostics, although its value
+head is untrained and its unused loss components remain zero.
+
+Use `--trace-worlds 0 3 --trace-update-interval 10 --trace-step-interval 5`
+with batched training to record only worlds 0 and 3, updates 0, 10, 20, ...,
+and steps 0, 5, 10, .... TOML equivalents are `trace_worlds = [0, 3]`,
+`trace_update_interval = 10`, and `trace_step_interval = 5`. Defaults are an
+empty world list and intervals of 1; scalar training accepts only world 0.
+Sampled records contain detailed choices, observations, resources, latent
+states and Entity Memory. Batched snapshots show post-step state, with
+`occupied` marking valid Entity Memory slots. Completed worlds are not
+repeated. Sampling does not change policy inputs, rewards or aggregate metrics.
+
+Each update also records elapsed wall seconds, completed world steps per
+second, and CUDA peak allocated/reserved bytes (null on CPU). Measurement
+metadata names the device/GPU, PyTorch/CUDA versions, timing scope and allocator
+scope. CUDA synchronizes at measurement boundaries; CPU uses wall timing.
+Timing includes reset, rollout, backward, diagnostics, optimizer work and
+sampled trace I/O and result construction (including scalar training record I/O),
+but excludes construction and final measurement serialization.
+Allocator peaks include existing process allocations, not just this update's
+new tensors. GPU utilization is explicitly not sampled. These measurements
+vary across otherwise reproducible runs and are not benchmark claims.
+
+Evaluation `RunRecorder` and comparison relationship analysis retain full
+recording independent of training sampling settings. For full scalar training
+analysis with `examples/analyze_run.py`, use `--trace-worlds 0` with both
+intervals set to 1. The analyzer rejects incomplete sampled traces rather than
+reporting partial relationship histories as complete. Batched traces use a
+separate `batch_trace` format and are not input to that scalar analyzer.

@@ -10,6 +10,7 @@ import torch
 
 from self_genesis.config import ExperimentConfig, load_config
 from self_genesis.training import run_training
+from self_genesis.policy import RecurrentPolicy
 
 
 class TrainingCommandTests(unittest.TestCase):
@@ -51,7 +52,7 @@ class TrainingCommandTests(unittest.TestCase):
                               'training_method = "reinforce"\n'
                               'learning_rate = 0.02\nvalue_loss_coefficient = 0.7\n'
                               'action_entropy_coefficient = 0.2\nmessage_entropy_coefficient = 0.3\n')
-            command = [sys.executable, '-m', 'self_genesis', 'train',
+            command = [sys.executable, '-m', 'self_genesis', 'train', '--trace-worlds', '0',
                        '--config', str(config), '--device', 'cpu', '--seed', '42',
                        '--episodes', '2', '--max-message-length', '0', '--entity-memory-dim', '5',
                        '--training-method', 'actor_critic',
@@ -68,7 +69,7 @@ class TrainingCommandTests(unittest.TestCase):
                 self.assertEqual(summary['total_steps'], 4)
                 self.assertEqual(summary['resolved_device'], 'cpu')
                 records = [json.loads(line) for line in output.read_text().splitlines()]
-                outputs.append(records)
+                outputs.append([r for r in records if r["type"] != "measurement"])
                 starts = [r for r in records if r['type'] == 'episode_start']
                 self.assertEqual(len(starts), summary['episodes'])
                 self.assertEqual([r['episode'] for r in starts], [0, 1])
@@ -87,6 +88,9 @@ class TrainingCommandTests(unittest.TestCase):
                     'appearance_dim': 2, 'vocabulary_size': 5,
                     'max_message_length': 0, 'memory_dim': 7, 'affect_dim': 3,
                     'entity_memory_dim': 5})
+                expected_count = RecurrentPolicy(**starts[0]['policy_settings']).parameter_count
+                self.assertEqual(summary['parameter_count'], expected_count)
+                self.assertTrue(all(r['parameter_count'] == expected_count for r in starts))
                 updates = [r for r in records if r['type'] == 'training']
                 self.assertEqual(len(updates), 2)
                 for update in updates:
@@ -118,7 +122,7 @@ class TrainingCommandTests(unittest.TestCase):
             output = Path(directory) / 'run.jsonl'
             config = Path(directory) / 'run.toml'
             config.write_text('survival_horizon = 7\n')
-            command = [sys.executable, '-m', 'self_genesis', 'train',
+            command = [sys.executable, '-m', 'self_genesis', 'train', '--trace-worlds', '0',
                        '--config', str(config), '--survival-horizon', '2',
                        '--initial-life', '10', '--episodes', '2',
                        '--point-generation-probability-max', '1', '--output', str(output)]

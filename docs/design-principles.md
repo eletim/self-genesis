@@ -13,7 +13,7 @@ self-genesis は、複数の学習Agentが他者との相互作用を通じて�
 
 本書と[代表シナリオ](representative-scenarios.md)は、
 [Issue #15](https://github.com/eletim/self-genesis/issues/15)で導入する環境の契約を定める。
-再生成・有限horizon・解析ログを含むこの環境契約はv0.0.5 / v0.0.6でも維持する。
+再生成・有限horizon・解析ログを含むこの環境契約はv0.0.5 / v0.0.6 / v0.0.7でも維持する。
 v0.0.3の初期Pointを使い切る環境と比較し、他者を区別して過去の関係を利用することが
 生存上有利になり得る環境圧を調べる。援助相手の選別や協力が必ず学習されるとは仮定しない。
 
@@ -33,6 +33,80 @@ Working Memoryを置き換えず、感性latentの循環、Communication、ラ�
 renewable resource worldと有限horizon、survival-onlyのActor-Criticを維持する。
 変更対象は記憶構造であり、援助・返報・協力の獲得や生存性能の改善を保証しない。
 以下は設計契約であり、この文書変更自体はEntity Memoryの実装完了を意味しない。
+
+## v0.0.7 のbatching・capacity契約（Issue #43）
+
+[Issue #43](https://github.com/eletim/self-genesis/issues/43)では、capacity不足とthroughput不足の
+影響を切り分けるため、独立した複数worldのbatched実行と数百万parameter級のpolicyを導入する。
+変更対象は実行方式とNN容量であり、以下は実装・性能達成の報告ではなく設計契約である。
+partner-specificな行動やEntity Memory利用、生存性能の改善を保証しない。
+
+### 独立worldのbatched実行
+
+- world stateと個体の内部状態をTensor中心に管理し、同じ処理段階にある複数worldの
+  Agent / Encounter forwardをbatch化する。まず64〜256 worldsを目標とし、
+  512〜1024 worldsへの拡張を妨げない構成にする。world数は環境規則を変える設定ではない。
+- 各worldは独立した乱数系列・資源・死亡判定・episode境界を持つ。
+  Encounterと先手・後手は各worldの生存集合からランダムに選び、world間で相手を組ませない。
+  Communicationと先手・後手の観測・行動の依存順序を維持し、未来の選択結果を入力へ漏らさない。
+- 第4節のResource timingを各worldでそのまま守る。開始時の資源による観測・選択、
+  GIVEの同時解決、Life減少と死亡、残存個体のPoint再生成、開始時生存個体へのRewardの順とする。
+  新しいPointは次stepから利用し、非参加・単独生存stepも従来どおり進める。
+- padding、死亡個体、終了済みworldをmaskし、架空のdecision・Reward・記憶更新を作らない。
+  worldごとの終了とresetを分離し、他worldの未完episodeや記憶をresetしない。
+
+### Tensor化しても保つ記憶と情報境界
+
+Working Memoryと感性latentの循環を維持し、Encounterをまたぐ個体固有の記憶を保持する。
+Encounter-local Working Memoryへ置き換えない。Entity Memoryは
+world / observer / entity-slot / entity-dimを扱えるTensor表現にしてよいが、
+検索keyは観測Appearanceとし、valueは経験から学習されるラベルなしのlatentとする。
+同じAppearanceを隠れたIDで区別せず、第8節の検索・書き込みの情報境界を維持する。
+共有するのはNN重みであり、Working Memory・感性・Entity Memoryをworld間・個体間で混同しない。
+これらのstateは各episode境界でresetする。
+
+world番号・Agent番号・slot番号は内部のroutingに使えても、Actor / Criticの入力や
+Appearanceに代わるidentity keyにはしない。hidden generation ability、実際の生成量、
+解析専用の相手別履歴、oracle情報も直接・記憶経由のいずれでも入力へ追加しない。
+Communication token、自己・他者、trust、reciprocityなどに教師ラベルを与えない。
+
+### 容量と数値精度
+
+Small / Medium / Largeなど複数容量を比較可能にし、層数・次元と実parameter数を記録する。
+初期目安はObservation embedding 256、Thought hidden 512、Working Memory 512、
+感性128、Entity Memory value 256とし、必要に応じてMLPを拡張してよい。
+これは固定architectureの指定ではなく、数百万parameter級を含む比較の出発点である。
+容量を増やしても通常の観測、Communication、recurrentな記憶と感性、Appearance-keyed
+Entity Memory、scalar Value headという役割と情報境界は変えない。
+BF16 / autocastは数値安定性を確認して利用し、return集計・Advantage・Value lossなどは
+必要に応じてFP32を維持する。精度・容量・world数・seedを実験条件に記録する。
+
+### 完全episodeのActor-Critic
+
+第11節のsurvival-only Actor-Criticを維持する。各個体の非割引survival return、
+detachしたAdvantage、Value回帰、action / message entropyを使い、PPOのclipping・
+旧policy比率による更新、social reward、補助的な教師信号は導入しない。
+batch内の各episodeは同じ更新前のpolicyでstep zeroから目的の終了まで収集する。
+episodeごとのlossを開始時Agent数Nで正規化し、更新対象の完全episodeについて平均する。
+world数やepisode長によりdecision数で再正規化した別の目的関数へ変えない。
+
+死亡または明示的なsurvival horizonまでの完全な経験で更新し、Value bootstrapは使わない。
+renewable worldでは有限horizonを必須とし、horizonで生存中の個体は死亡ではなく打ち切りとする。
+collection budgetやbatch境界をterminalとして扱わず、未完episodeのstateとgraphを保持する。
+同じ更新に必要なepisodeが完了するまで重みを更新せず、loss処理前のdetachや
+truncated BPTTでWorking Memory・感性・Entity Memoryを通るrecurrent勾配を切らない。
+
+### 正しさと観察可能性
+
+小さな決定的条件で乱数の選択結果を揃え、逐次referenceとbatched実行の資源更新、
+死亡 / horizon、Encounter routing、GIVE / NOTHING、Communication、Reward集計を比較する。
+world間・個体間のrecurrent state / Entity Memory分離とtraining gradient flowも検証する。
+浮動小数点の比較は精度に応じた許容誤差を明示する。
+trainingではloss内訳・entropy・survival・GIVE率・Value error・gradient normを軽量に記録し、
+詳細trace・latent・Entity Memoryは代表worldのsamplingやevaluationで解析可能にする。
+world数・容量ごとにsteps / encounters / episodes per second、wall-clock、VRAM、
+GPU utilization・powerを実測し、速度と学習結果を分けて評価する。
+解析ログや介入結果は引き続きReward・教師信号・policy inputへ戻さない。
 
 ## 1. シンプルさを優先する
 

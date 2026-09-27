@@ -95,16 +95,21 @@ class RecurrentPolicy(nn.Module):
         """Exact shared parameter count, excluding per-agent episode state."""
         return sum(parameter.numel() for parameter in self.parameters())
 
-    def _recur(self, inputs, previous_memory, previous_affect, retrieved):
-        context = torch.cat((inputs, previous_memory, previous_affect, retrieved), dim=-1)
+    def _think(self, context, previous_memory):
+        """Yield callback-local steps without retaining a trace."""
         if self.thought_mode == "shallow":
-            thought = torch.tanh(self.thought(context))
+            yield torch.tanh(self.thought(context))
         else:
-            # Only Thought changes inside the loop. Its lifetime is one callback;
-            # context and intermediate Thoughts retain their full training graphs.
             thought = torch.zeros_like(previous_memory)
             for _ in range(self.think_steps):
                 thought = F.relu(self.thought(torch.cat((context, thought), dim=-1)))
+                yield thought
+
+    def _recur(self, inputs, previous_memory, previous_affect, retrieved):
+        context = torch.cat((inputs, previous_memory, previous_affect, retrieved), dim=-1)
+        # Only Thought advances inside the loop; keep its full training graph.
+        for thought in self._think(context, previous_memory):
+            pass
         memory = self.memory_update(torch.cat((thought, previous_affect), dim=-1),
                                     previous_memory)
         affect = torch.tanh(self.affect_update(torch.cat((inputs, thought, memory), dim=-1)))

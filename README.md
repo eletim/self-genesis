@@ -341,6 +341,37 @@ callback. Thought itself is discarded; persistent memories are retained.
 Affect dimensions have no predefined meanings or supervised targets. No agent
 indices, self labels, or auxiliary classification objectives are added.
 
+Thought diagnostics are opt-in analysis calls, with no trace collection in normal
+rollouts. Probe a representative callback using its **incoming** state:
+
+```python
+from self_genesis.thought_diagnostics import probe_thought_steps_batch
+
+steps = probe_thought_steps_batch(
+    network, observation, state, active=active, sample=(world, observer),
+    communicating=False,
+)
+```
+
+The selected row must be active; only that row is encoded and replayed, so probe
+cost does not grow with the number of worlds or observers. For scalar observations,
+use `probe_thought_steps(network, observation, state, communicating=False)`.
+Callers choose representative rows and probing frequency; neither API runs
+implicitly during training. Each step returns plain Python records with Thought
+L2 norm, L2 change norm, cosine similarity, relative change and a convergence flag,
+saturation fraction, action logits and their signed changes, and value and its
+signed change. Changes compare adjacent steps, starting with zero Thought and its
+hypothetical readout; cosine is zero when either vector is zero. Convergence means
+`change_norm / max(previous_norm, 1e-8) <= convergence_tolerance` (default `1e-3`),
+and never stops recurrence. Saturation is the fraction of zero ReLU units, or
+`abs(Thought) >= 0.99` for shallow tanh. Shallow mode emits one record.
+
+Each readout applies the memory GRU hypothetically to the same incoming memory
+and affect, then reads the action and value heads. Action logits always describe
+NOTHING/GIVE, including probes with communication context. No intermediate memory,
+affect, or Entity Memory is committed, and no decisions are sampled. Probes run
+without gradients and their records are never policy inputs or loss terms.
+
 Entity Memory stores one unlabeled latent value per distinct observed Appearance,
 using exact tensor equality for retrieval. An unseen Appearance retrieves zeros;
 identical Appearances share an entry, without hidden IDs. After each callback, a

@@ -198,14 +198,15 @@ class BatchedTraceRecorder:
         self.write = write
         self.update = 0
 
-    def record_step(self, collector, result, step):
+    def record_step(self, collector, result, previous_steps):
         config = self.config
-        if (not config.trace_worlds or self.update % config.trace_update_interval
-                or step % config.trace_step_interval):
+        if not config.trace_worlds or self.update % config.trace_update_interval:
             return
         for world in config.trace_worlds:
             # Done worlds freeze; do not duplicate their final snapshot.
-            if int(collector.world.steps[world]) != step + 1:
+            step = int(previous_steps[world])
+            if (int(collector.world.steps[world]) == step
+                    or step % config.trace_step_interval):
                 continue
 
             def row(tensor):

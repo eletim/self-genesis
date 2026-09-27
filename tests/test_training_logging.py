@@ -9,8 +9,9 @@ from unittest.mock import patch
 import torch
 
 from examples.analyze_run import analyze
+from self_genesis.batched_rollout import BatchedRolloutCollector
 from self_genesis.config import ExperimentConfig, load_config
-from self_genesis.observation import RunRecorder
+from self_genesis.observation import BatchedTraceRecorder, RunRecorder
 from self_genesis.policy import RecurrentPolicy
 from self_genesis.rollout import RolloutCollector
 from self_genesis.training import run_training, survival_loss_components
@@ -75,6 +76,34 @@ class TrainingLoggingTests(unittest.TestCase):
                     self.assertEqual(len(traces[0]['entity_memory']['values']), 2)
                 else:
                     self.assertEqual(len(traces[0]['callbacks']), 4)
+
+    def test_batched_trace_sampling_after_independent_world_reset(self):
+        for device in (['cpu', 'cuda'] if torch.cuda.is_available() else ['cpu']):
+            with self.subTest(device=device):
+                config = self.config(batched=True, device=device, trace_worlds=(0, 1),
+                                     trace_step_interval=2)
+                collector = BatchedRolloutCollector(
+                    config, RecurrentPolicy(config.appearance_dim).to(device), seeds=[0, 1, 2])
+                records = []
+                collector.trace_recorder = BatchedTraceRecorder(
+                    config, lambda kind, **values: records.append(values))
+                collector.world.state.life[0] = 1
+                collector.collect(1)
+                self.assertEqual([(r['world'], r['step']) for r in records], [(0, 0), (1, 0)])
+                records.clear()
+
+                collector.reset(0, seed=3)
+                collector.collect(1)
+                collector.collect(1)
+                collector.collect(2)
+                self.assertEqual([(r['world'], r['step']) for r in records],
+                                 [(0, 0), (1, 2), (0, 2)])
+                records.clear()
+
+                # Other worlds stay finished throughout the next episode.
+                collector.reset(0, seed=4)
+                collector.collect(5)
+                self.assertEqual([(r['world'], r['step']) for r in records], [(0, 0), (0, 2)])
 
     def test_unsampled_scalar_never_serializes_memory_and_evaluation_stays_full(self):
         with tempfile.TemporaryDirectory() as directory:

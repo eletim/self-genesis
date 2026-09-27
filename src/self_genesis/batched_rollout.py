@@ -85,15 +85,15 @@ class BatchedRolloutCollector:
         if type(max_steps) is not int or max_steps < 1:
             raise ValueError("max_steps must be a positive integer")
         start = self.world.steps.clone()
-        trace_start = int(start.max()) if self.trace_recorder is not None else 0
         experiences = []
         for _ in range(max_steps):
             if bool(self.world.done.all()):
                 break
+            trace_steps = self.world.steps.clone() if self.trace_recorder is not None else None
             result = self.protocol.step(self.state)
             self.state = result.state
             if self.trace_recorder is not None:
-                self.trace_recorder.record_step(self, result, trace_start + len(experiences))
+                self.trace_recorder.record_step(self, result, trace_steps)
             experiences.append(BatchedExperience(
                 result.world.reward, result.world.died, result.decisions))
         return BatchedRollout(

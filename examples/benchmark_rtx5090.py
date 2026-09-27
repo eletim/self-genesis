@@ -59,6 +59,7 @@ def benchmark_config(args):
     """Resolve a worker workload without changing its training or resource rules."""
     return load_config(None, capacity_preset=args.capacity, device='cuda',
                        seed=args.seed, batched=args.worlds > 0,
+                       thought_mode="recurrent", think_steps=getattr(args, "think_steps", 16),
                        num_worlds=max(1, args.worlds), mixed_precision=args.precision,
                        num_agents=args.num_agents, encounter_count=args.encounter_count,
                        survival_horizon=args.horizon, episodes=args.warmup + args.updates,
@@ -67,6 +68,9 @@ def benchmark_config(args):
 
 
 def sweep_cases(args):
+    if args.sweep == 'recurrent':
+        return [(args.capacity, args.precision, worlds, args.num_agents, args.encounter_count)
+                for worlds in args.world_counts]
     if args.sweep == 'density':
         # Capacity and precision stay fixed within this 32-agent comparison.
         return [(args.capacity, args.precision, worlds, 32, pairs)
@@ -86,7 +90,8 @@ def worker(args):
     config = benchmark_config(args)
     network = RecurrentPolicy(config.appearance_dim, memory_dim=config.memory_dim,
                               affect_dim=config.affect_dim,
-                              entity_memory_dim=config.entity_memory_dim).cuda()
+                              entity_memory_dim=config.entity_memory_dim,
+                              thought_mode=config.thought_mode, think_steps=config.think_steps).cuda()
     optimizer = torch.optim.Adam(network.parameters(), lr=config.learning_rate)
     seeds = [args.seed + row for row in range(config.num_worlds)]
     collector = (BatchedRolloutCollector(config, network, seeds=seeds) if config.batched
@@ -103,6 +108,7 @@ def worker(args):
     records = []
     telemetry = Telemetry()
     started = time.perf_counter()
+    status, error = 'ok', None
     try:
         for update in range(args.warmup + args.updates):
             if update == args.warmup:
@@ -113,24 +119,30 @@ def worker(args):
                       if config.batched else train_episode(collector, optimizer))
             steps = sum(result.steps) if config.batched else result.steps
             measured = measurement.finish(steps)
+            gradients = [p.grad for p in network.parameters() if p.grad is not None]
+            gradients_finite = bool(gradients) and all(torch.isfinite(g).all().item() for g in gradients)
             finite = all(torch.isfinite(p).all().item() for p in network.parameters())
-            if not finite or not math.isfinite(result.loss) or not math.isfinite(result.metrics['gradient_norm']):
+            if not gradients_finite or not finite or not math.isfinite(result.loss) or not math.isfinite(result.metrics['gradient_norm']):
                 raise RuntimeError('Non-finite loss, gradient norm, or updated parameters')
             records.append(dict(update=update, warmup=update < args.warmup,
                                 steps=steps, encounters=counts[-1], episodes=config.num_worlds if config.batched else 1,
                                 loss=result.loss, metrics=result.metrics, parameters_finite=finite,
+                                gradients_finite=gradients_finite, gradient_tensor_count=len(gradients),
                                 **measured))
+    except Exception as failure:
+        status, error = 'failed', f'{type(failure).__name__}: {failure}'
     finally:
         telemetry.stop.set()
         if telemetry.thread.ident is not None:
             telemetry.thread.join()
     measured = [record for record in records if not record['warmup']]
     seconds = sum(record['elapsed_seconds'] for record in measured)
-    return dict(status='ok', capacity=args.capacity, config=asdict(config),
+    return dict(status=status, error=error, failed_update=update if error else None,
+                capacity=args.capacity, config=asdict(config),
                 parameter_count=network.parameter_count, records=records,
                 measured_seconds=seconds, worker_seconds=time.perf_counter() - started,
                 rates={name + '_per_second': sum(row[name] for row in measured) / seconds
-                       for name in ('steps', 'encounters', 'episodes')},
+                       for name in ('steps', 'encounters', 'episodes')} if seconds else {},
                 telemetry=telemetry.samples, telemetry_errors=telemetry.errors,
                 warmup_updates=args.warmup, measured_updates=args.updates,
                 source_revision=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
@@ -149,9 +161,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
-    parser.add_argument('--sweep', choices=['scaling', 'density'], default='scaling')
+    parser.add_argument('--sweep', choices=['scaling', 'density', 'recurrent'], default='scaling')
     parser.add_argument('--world-counts', type=int, nargs='+', default=[64, 128, 256],
-                        help='positive world counts for the 32-agent density sweep')
+                        help='positive world counts for density or recurrent sweeps')
+    parser.add_argument('--think-steps', type=int, choices=[16, 32, 64], default=16,
+                        help='worker recurrence depth')
+    parser.add_argument('--include-64', action='store_true',
+                        help='also run 64 think steps in the recurrent sweep')
     parser.add_argument('--num-agents', type=int, default=4, help=argparse.SUPPRESS)
     parser.add_argument('--encounter-count', type=int, default=1, help=argparse.SUPPRESS)
     parser.add_argument('--capacity', choices=['small', 'medium', 'large'], default='small')
@@ -171,17 +187,24 @@ def main():
         result = worker(args)
         with args.output.open('x') as file:
             json.dump(result, file, allow_nan=False, sort_keys=True)
+        if result['status'] != 'ok':
+            raise SystemExit(result['error'])
         return
     args.output.mkdir(parents=True, exist_ok=False)
-    for capacity, precision, worlds, agents, pairs in sweep_cases(args):
+    cases = [(case, depth) for case in sweep_cases(args)
+             for depth in ((16, 32, 64) if args.include_64 else (16, 32))
+             ] if args.sweep == 'recurrent' else [(case, args.think_steps) for case in sweep_cases(args)]
+    for (capacity, precision, worlds, agents, pairs), depth in cases:
         name = f'{capacity}-{precision}-{worlds}'
-        if args.sweep == 'density':
+        if args.sweep in ('density', 'recurrent'):
             name += f'-agents{agents}-pairs{pairs}'
+        if args.sweep == 'recurrent':
+            name += f'-think{depth}'
         command = [sys.executable, __file__, '--worker', '--output', str(args.output / (name + '.json')),
                    '--capacity', capacity, '--precision', precision, '--worlds', str(worlds),
                    '--num-agents', str(agents), '--encounter-count', str(pairs),
                    '--updates', str(args.updates), '--warmup', str(args.warmup),
-                   '--horizon', str(args.horizon), '--seed', str(args.seed)]
+                   '--horizon', str(args.horizon), '--seed', str(args.seed), '--think-steps', str(depth)]
         start = time.perf_counter()
         try:
             completed = subprocess.run(command, capture_output=True, text=True, timeout=args.timeout)

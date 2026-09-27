@@ -883,6 +883,14 @@ The small-configuration reference coverage is split by responsibility:
 | `test_batched_policy.py`, `test_batched_entity_memory.py` | Scalar policy and Appearance memory lookup/write results, repeated/colliding keys, inactive observers, disabled memory, reset/detach, and private recurrent/Entity Memory gradients. |
 | `test_batched_rollout.py` | Scalar loss reduction for both training methods, reward accounting for unselected/lone survivors, continuation, and gradients. |
 | `test_batched_training.py` | Independent scalar complete episodes, loss components, parameter gradients, and Adam updates. Covers extinction and finite horizons, empty/three-token channels, repeated updates, and renewable resources with successful/unaffordable GIVE and NOTHING. |
+| `test_density_training_parity.py` | Independently scripted multi-pair episodes at fixed and fractional density: resources, routing, Communication, completion memory, scalar/batched traces, encounter counters, episode-normalized Actor-Critic losses, gradients and Adam updates across death and horizon boundaries. |
+
+Batched traces include explicit `pairs` of first/second participants, excluding
+unused slots, alongside the existing flat, `-1`-padded `participants` list.
+Encounter counters count pairs of action decisions, including NOTHING; messages,
+padding, finished worlds and steps without encounters do not add encounters.
+Increasing density adds decision terms to the complete-episode objective without
+renormalizing by encounters: losses still average over starting agents and worlds.
 
 Policy initialization uses fixed seeds in the numerical comparisons. World tests
 replay controlled generation uniforms for scalar survivors because the scalar

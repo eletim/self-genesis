@@ -214,9 +214,13 @@ class BatchedTraceRecorder:
                 return tensor[world].detach().cpu().tolist()
 
             state = result.state
+            participants = row(result.pairs)
             self.write(
                 "batch_trace", update=self.update, world=world, step=step,
-                participants=row(result.pairs),
+                participants=participants,
+                pairs=[participants[offset:offset + 2]
+                       for offset in range(0, len(participants), 2)
+                       if participants[offset] >= 0],
                 decisions=[dict(communicating=d.communicating, active=row(d.active),
                                 choice=row(d.choice),
                                 observation={name: row(value) for name, value

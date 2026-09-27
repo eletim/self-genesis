@@ -724,6 +724,8 @@ partners in bin zero (no self pairs). `repeat_fraction` divides
 `repeat_encounter_callbacks` by `encounter_callbacks`, and is null without
 encounters. Evaluation summaries pool these distributions within the existing
 training-seed/policy/intervention groups, preserving episode boundaries.
+When any pooled episode lacks exposure data (as in retained older reports),
+the summary omits `encounter_exposure` and retains the legacy metrics.
 Actual identities remain analysis-only, including under Appearance collisions
 and interventions. Existing strictly prior aid histories, first/repeat producer
 bins, GIVE/collapse and Communication metrics retain their own denominators.

@@ -212,7 +212,11 @@ def communication_metrics(messages, vocabulary_size):
 
 
 def evaluation_summary(evaluations, vocabulary_size):
-    """Pool evaluation samples within one training seed and treatment only."""
+    """Pool one training seed/treatment, retaining legacy report support.
+
+    Exposure is emitted only when every episode supplies it; older reports
+    retain their summary shape, and mixed reports never claim partial totals.
+    """
     rows = [row for evaluation in evaluations for row in evaluation['relationship_actions']]
     lifetimes = [row for evaluation in evaluations for row in evaluation['lifetimes']]
     messages = [row['message'] for evaluation in evaluations
@@ -224,11 +228,8 @@ def evaluation_summary(evaluations, vocabulary_size):
     unaided = history['encountered_without_received_aid']['action_ratios']['GIVE']
     censored = sum(row['censored'] for row in lifetimes)
     observed_mean = sum(row['observed_steps'] for row in lifetimes) / len(lifetimes)
-    return dict(
+    summary = dict(
         **actions,
-        encounter_exposure=encounter_exposure_metrics([
-            agent for evaluation in evaluations
-            for agent in evaluation['encounter_exposure']['per_agent']]),
         give_collapse=('no_actions' if give is None else
                        'near_always_GIVE' if give >= 0.95 else
                        'near_always_NOTHING' if give <= 0.05 else 'mixed'),
@@ -239,3 +240,8 @@ def evaluation_summary(evaluations, vocabulary_size):
         partner_history_metrics=partner_history_metrics(rows),
         prior_aid_give_difference=None if aided is None or unaided is None else aided - unaided,
         communication=communication_metrics(messages, vocabulary_size))
+    if all('encounter_exposure' in evaluation for evaluation in evaluations):
+        summary['encounter_exposure'] = encounter_exposure_metrics([
+            agent for evaluation in evaluations
+            for agent in evaluation['encounter_exposure']['per_agent']])
+    return summary

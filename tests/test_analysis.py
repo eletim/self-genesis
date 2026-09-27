@@ -264,3 +264,24 @@ class AnalysisTests(unittest.TestCase):
         producer_bins = summary['partner_history_metrics']['partner_producers']
         self.assertEqual(sum(b['action_callbacks'] for group in producer_bins.values()
                              for b in group['bins'].values()), 12)
+
+    def test_legacy_and_mixed_evaluations_preserve_summary_metrics(self):
+        from self_genesis.analysis import evaluation_summary
+        from self_genesis.comparison import evaluate_policy
+        from self_genesis.config import ExperimentConfig
+        from self_genesis.world import Action
+        current = evaluate_policy(ExperimentConfig(num_agents=2, initial_life=2), Action.NOTHING)
+        legacy = {key: value for key, value in current.items() if key != 'encounter_exposure'}
+        expected = evaluation_summary([current, current], 4)
+        del expected['encounter_exposure']
+        for evaluations in ([legacy, legacy], [legacy, current], [current, legacy]):
+            with self.subTest(legacy_first='encounter_exposure' not in evaluations[0]):
+                self.assertEqual(evaluation_summary(evaluations, 4), expected)
+
+    def test_retained_entity_memory_report_verifier(self):
+        from examples.verify_entity_memory_experiment import read_report, verify
+        evidence = Path(__file__).resolve().parents[1] / 'docs' / 'evidence'
+        old = read_report(evidence / 'matched-learning' / 'actor_critic.json.gz')
+        new = read_report(evidence / 'entity-memory' / 'v006.json.gz')
+        result = verify(old, new)
+        self.assertEqual(result['summaries'], new['summaries'])

@@ -3,7 +3,7 @@
 These scenarios are durable examples of the behavior self-genesis is intended to study.
 They are not fixed expected outputs and should not be treated as hard-coded policies for the agents.
 The v0.0.4 resource rules follow the [Issue #15 design contract](design-principles.md),
-including its step order, and remain in force for v0.0.8.
+including its step order, and remain in force for v0.0.9.
 Appearance-keyed Entity Memory and completion writes are implemented and tested;
 the social interpretations in these scenarios remain hypotheses, not guaranteed
 learning outcomes. v0.0.7 adds capacity presets and batched execution without
@@ -192,3 +192,36 @@ decision数によるlossの再正規化やsocial reward、補助教師信号を�
 同じ有限horizonで反復回数、生存、相手別履歴に依存する行動、Entity Memory resetや
 Appearanceへの介入の影響を調べる。生存だけが伸びる場合、記憶介入が無影響な場合、
 常時GIVE / NOTHINGに偏る場合も許容し、関係記憶や協力の獲得を必須結果にしない。
+
+## 16. Thoughtは判断ごとに始まり、Working Memoryは残る（v0.0.9）
+
+[Issue #70のThought loop契約](design-principles.md)では、
+AがBへのmessageを作るcallbackでThought_0をゼロから初期化する。
+その時点のObservation・Working Memory・感性・検索済みEntity Memoryを固定し、
+同一のReLU-based Coreへ直前のThoughtを戻して、既定で16回更新する。
+Working Memoryと感性は途中では更新せず、最終Thoughtから各1回更新する。
+Entity Memoryもthink stepごとの書き込みをせず、既存のcallback更新と完了書き込みを維持する。
+これは実装済みの挙動の報告ではなく設計契約の例である。
+
+Bのreplyを受けてAがactionを選ぶcallbackでは、その時点の正当な観測と更新済みの記憶で
+Contextを作り直す。Thoughtは再びゼロから始め、message時のThoughtを直接持ち越さない。
+一方、Working Memory・感性・Entity Memoryは残り、CとのEncounterを挟んだ後の
+Bとの再Encounterにも利用できる。episode境界ではこれらの記憶もresetする。
+一時的なThoughtの破棄は、完全episodeのlossに必要な学習graphのdetachを意味しない。
+
+## 17. 16回考えても外界は16step進まない（v0.0.9）
+
+シナリオ14のA–BとC–Dが各callbackで16回のThought loopを行っても、
+loop中にLife / Point、world step、horizon、Rewardは変わらない。
+Point生成・死亡判定も起こらず、Encounterは次のmessageやactionへ進まない。
+Aのloop途中でBの新しいreplyやC–Dの情報を注入せず、検索済みEntity Memoryも固定する。
+全pairの選択完了後に初めて通常の資源解決を行い、シナリオ14と同じ選択・生成抽選なら
+同じ資源結果と各個体1のRewardになる。非参加のEに架空の思考callbackを作らない。
+
+`think_steps = 32`や64なら同じCoreをその回数だけ適用し、world時間はやはり1stepだけ進む。
+未指定なら16、15・0・16.5・真偽値は設定エラーとする。
+16個の別Coreによる計算や早期終了で最低回数を省略する実装はこの契約を満たさない。
+内部反復は追加のaction / message samplingやlossのdecision数にはならず、
+学習は既存の完全episode・survival-only Actor-Criticに従う。
+Thoughtが変化し続けることや協力を獲得することは保証せず、解析結果も教師信号にしない。
+生成能力・ID・oracle情報をThoughtの初期値やContextへ渡して推論を助けることもしない。

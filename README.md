@@ -833,8 +833,8 @@ action. Completion updates only Appearance memory, without advancing Working
 Memory or affect. Equal Appearances share entries. Reserve sufficient entity
 slots for all distinct partners; overflow raises rather than evicting memories.
 
-Use `state.reset(completed_worlds)` with a boolean `[world]` mask at episode
-boundaries, and `state.detach()` only at an explicit optimizer boundary. Updates
+Use `state = state.reset(completed_worlds)` with a boolean `[world]` mask at episode
+boundaries, and `state = state.detach()` only at an explicit optimizer boundary. Updates
 preserve old states and recurrent gradients across encounters and callbacks.
 CPU/CUDA parity tests compare batched outputs, completion writes and parameter
 gradients with sequential callbacks; they also check masks, private gradients,
@@ -918,8 +918,8 @@ Per-world seeded device-side Philox streams feed tensor selection and sampling
 on the world device, without consuming global RNG state. Changing or resetting another
 world does not change a world's stream. These streams reproduce batched runs,
 not the legacy Python encounter RNG sequence. Reset world resources with
-`world.reset(row, seed=...)` and recurrent/entity state with `state.reset(mask)`;
-encounter streams continue across resets. Detach state only at an optimizer
+`world.reset(row, seed=...)` and recurrent/entity state with `state = state.reset(mask)`;
+encounter streams continue across resets. Use `state = state.detach()` only at an optimizer
 boundary. This executor does not change the existing sequential training CLI.
 
 

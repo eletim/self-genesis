@@ -7,8 +7,18 @@ from torch import nn
 from torch.distributions import Categorical
 from torch.nn import functional as F
 
+from self_genesis.batched_policy import BatchedObservation, BatchedPolicyState
+from self_genesis.entity_memory import BatchedEntityMemory
 from self_genesis.encounter import EncounterExperience, Observation
 from self_genesis.world import Action
+
+
+# Working Memory/thought width, circulating affect width, Entity Memory width.
+CAPACITY_PRESETS = {
+    "small": (16, 4, 16),
+    "medium": (128, 32, 64),
+    "large": (512, 128, 256),
+}
 
 
 @dataclass(frozen=True)
@@ -67,6 +77,133 @@ class RecurrentPolicy(nn.Module):
             self.encounter_update = nn.GRUCell(
                 input_dim + memory_dim + affect_dim + 4, entity_memory_dim)
 
+    @classmethod
+    def from_preset(cls, appearance_dim: int, capacity: str, **overrides):
+        """Build a named capacity; explicit dimension/channel overrides are allowed."""
+        if capacity not in CAPACITY_PRESETS:
+            raise ValueError("capacity must be small, medium, or large")
+        dimensions = dict(zip(("memory_dim", "affect_dim", "entity_memory_dim"),
+                              CAPACITY_PRESETS[capacity]))
+        dimensions.update(overrides)
+        return cls(appearance_dim, **dimensions)
+
+    @property
+    def parameter_count(self) -> int:
+        """Exact shared parameter count, excluding per-agent episode state."""
+        return sum(parameter.numel() for parameter in self.parameters())
+
+    def _recur(self, inputs, previous_memory, previous_affect, retrieved):
+        thought = torch.tanh(self.thought(torch.cat(
+            (inputs, previous_memory, previous_affect, retrieved), dim=-1)))
+        memory = self.memory_update(torch.cat((thought, previous_affect), dim=-1),
+                                    previous_memory)
+        affect = torch.tanh(self.affect_update(torch.cat((inputs, thought, memory), dim=-1)))
+        return thought, memory, affect
+
+    def initial_batch_state(self, worlds: int, observers: int, *, slots: int):
+        parameter = next(self.parameters())
+        entities = BatchedEntityMemory.empty(
+            worlds, observers, slots, self.appearance_dim, self.entity_memory_dim,
+            device=parameter.device, dtype=parameter.dtype)
+        return BatchedPolicyState(parameter.new_zeros(worlds, observers, self.memory_dim),
+                                  parameter.new_zeros(worlds, observers, self.affect_dim),
+                                  entities)
+
+    def _encode_batch(self, observation, state, active, communicating):
+        parameter = next(self.parameters())
+        shape = state.memory.shape[:2]
+        if (state.memory.shape != (*shape, self.memory_dim)
+                or state.affect.shape != (*shape, self.affect_dim)
+                or len(shape) != 2):
+            raise ValueError("Unexpected batched recurrent state shape")
+        for tensor in (state.memory, state.affect, state.entities.values):
+            if tensor.device != parameter.device or tensor.dtype != parameter.dtype:
+                raise ValueError("State must match policy device and dtype")
+        if (active.shape != shape or active.dtype != torch.bool
+                or active.device != parameter.device):
+            raise ValueError("active must be boolean [world, observer] on the policy device")
+        for name, suffix, dtype in (
+            ("resources", (4,), None),
+            ("partner_appearance", (self.appearance_dim,), parameter.dtype),
+            ("first", (), torch.bool),
+            ("received_message", (self.max_message_length,), torch.int64),
+            ("partner_action", (), torch.int64),
+        ):
+            tensor = getattr(observation, name)
+            if (tensor.shape != (*shape, *suffix) or tensor.device != parameter.device
+                    or (dtype is not None and tensor.dtype != dtype)):
+                raise ValueError(f"Unexpected {name} shape, device or dtype")
+        resources = observation.resources[active].to(parameter)
+        appearance = observation.partner_appearance[active]
+        message = observation.received_message[active]
+        action = observation.partner_action[active]
+        if (bool((~torch.isfinite(resources) | (resources < 0)).any())
+                or not bool(torch.isfinite(appearance).all())
+                or bool(((message < 0) | (message > self.vocabulary_size)).any())
+                or bool(((action < 0) | (action > 2)).any())):
+            raise ValueError("Active observation contains invalid resources, Appearance or categories")
+        if bool(((message[..., :-1] == self.vocabulary_size)
+                 & (message[..., 1:] != self.vocabulary_size)).any()):
+            raise ValueError("Message padding must be a suffix")
+        context = torch.cat((observation.first[active].unsqueeze(-1).to(parameter),
+                             F.one_hot(action, 3).to(parameter),
+                             parameter.new_full((action.numel(), 1), communicating)), dim=-1)
+        encoded_message = F.one_hot(message, self.vocabulary_size + 1).flatten(1).to(parameter)
+        return torch.cat((resources.log1p(), context, appearance, encoded_message), dim=-1)
+
+    def forward_batch(self, observation: BatchedObservation, state: BatchedPolicyState, *,
+                      communicating: bool, active: torch.Tensor):
+        """One same-phase callback across worlds/observers, without per-agent forwards.
+
+        Return logits, scalar values and new state. Inactive output rows are zero;
+        their state is preserved. Callers sample only active rows (and skip message
+        decisions when max_message_length is zero). Actor and critic share only
+        permitted observations and the resulting private recurrent memory.
+        """
+        inputs = self._encode_batch(observation, state, active, communicating)
+        retrieved = state.entities.retrieve(observation.partner_appearance, active=active)[active]
+        thought, memory, affect = self._recur(inputs, state.memory[active],
+                                             state.affect[active], retrieved)
+        next_memory, next_affect = state.memory.clone(), state.affect.clone()
+        next_memory[active], next_affect[active] = memory, affect
+        logits = inputs.new_zeros(*active.shape, self.vocabulary_size if communicating else 2)
+        values = inputs.new_zeros(active.shape)
+        logits[active] = self.message_head(memory) if communicating else self.action_head(memory)
+        values[active] = self.value_head(memory).squeeze(-1)
+        entities = state.entities
+        if self.entity_memory_dim:
+            value = inputs.new_zeros(*active.shape, self.entity_memory_dim)
+            value[active] = self.entity_update(
+                torch.cat((inputs, thought, memory, affect), dim=-1), retrieved)
+            entities = entities.write(observation.partner_appearance, value, active=active)
+        return logits, values, BatchedPolicyState(next_memory, next_affect, entities)
+
+    def complete_encounter_batch(self, observation: BatchedObservation,
+                                 state: BatchedPolicyState, *, action: torch.Tensor,
+                                 gave: torch.Tensor, received: torch.Tensor,
+                                 active: torch.Tensor):
+        """Write resolved, participant-visible outcomes without advancing recurrence.
+
+        action is int64 (0 NOTHING, 1 GIVE); gave/received are boolean. All have
+        shape [world, observer]. Only the completion phase may reveal final actions.
+        """
+        inputs = self._encode_batch(observation, state, active, False)
+        for tensor, dtype in ((action, torch.int64), (gave, torch.bool), (received, torch.bool)):
+            if tensor.shape != active.shape or tensor.dtype != dtype or tensor.device != active.device:
+                raise ValueError("Unexpected batched encounter outcome shape, device or dtype")
+        if bool(((action[active] < 0) | (action[active] > 1)).any()):
+            raise ValueError("Encounter action must be 0 NOTHING or 1 GIVE")
+        if not self.entity_memory_dim:
+            return state
+        outcome = torch.cat((F.one_hot(action[active], 2), gave[active].unsqueeze(-1),
+                             received[active].unsqueeze(-1)), dim=-1).to(inputs)
+        value = inputs.new_zeros(*active.shape, self.entity_memory_dim)
+        value[active] = self.encounter_update(
+            torch.cat((inputs, state.memory[active], state.affect[active], outcome), dim=-1),
+            state.entities.retrieve(observation.partner_appearance, active=active)[active])
+        return BatchedPolicyState(state.memory, state.affect, state.entities.write(
+            observation.partner_appearance, value, active=active))
+
     def initial_state(self) -> PolicyState:
         parameter = next(self.parameters())
         return PolicyState(parameter.new_zeros(self.memory_dim),
@@ -110,10 +247,7 @@ class RecurrentPolicy(nn.Module):
                 communicating: bool) -> tuple[torch.Tensor, PolicyState]:
         inputs = self._encode(observation, communicating)
         retrieved = self.retrieve_entity(observation.partner_appearance, state)
-        thought = torch.tanh(self.thought(torch.cat(
-            (inputs, state.memory, state.affect, retrieved))))
-        memory = self.memory_update(torch.cat((thought, state.affect)), state.memory)
-        affect = torch.tanh(self.affect_update(torch.cat((inputs, thought, memory))))
+        thought, memory, affect = self._recur(inputs, state.memory, state.affect, retrieved)
         logits = self.message_head(memory) if communicating else self.action_head(memory)
         entities = state.entities
         if self.entity_memory_dim:

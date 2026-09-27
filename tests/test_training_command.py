@@ -10,6 +10,7 @@ import torch
 
 from self_genesis.config import ExperimentConfig, load_config
 from self_genesis.training import run_training
+from self_genesis.policy import RecurrentPolicy
 
 
 class TrainingCommandTests(unittest.TestCase):
@@ -87,6 +88,9 @@ class TrainingCommandTests(unittest.TestCase):
                     'appearance_dim': 2, 'vocabulary_size': 5,
                     'max_message_length': 0, 'memory_dim': 7, 'affect_dim': 3,
                     'entity_memory_dim': 5})
+                expected_count = RecurrentPolicy(**starts[0]['policy_settings']).parameter_count
+                self.assertEqual(summary['parameter_count'], expected_count)
+                self.assertTrue(all(r['parameter_count'] == expected_count for r in starts))
                 updates = [r for r in records if r['type'] == 'training']
                 self.assertEqual(len(updates), 2)
                 for update in updates:

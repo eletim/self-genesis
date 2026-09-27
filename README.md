@@ -710,8 +710,8 @@ independently of batch ordering or other worlds' deaths and resets.
 `BatchedEntityMemory` in `self_genesis.entity_memory` provides the corresponding
 Appearance-keyed memory storage primitive. Keys have shape
 `[world, observer, slot, appearance]`, values `[world, observer, slot, value]`,
-and occupancy `[world, observer, slot]`. It is independent of the sequential
-policy adapter; batched encounter/training collection is not yet connected.
+and occupancy `[world, observer, slot]`. It is used by the batched policy API
+below; batched encounter/training collection is not yet connected.
 
 Create it with `BatchedEntityMemory.empty(worlds, observers, slots, appearance_dim,
 value_dim, device=..., dtype=...)`, reserving enough slots for each observer's
@@ -729,3 +729,91 @@ episode boundary, also assign `memory = memory.reset(completed_worlds)` using a
 boolean `[world]` mask alongside the world reset. This clears selected worlds'
 keys and values while preserving ongoing worlds and their gradient history.
 Call `detach()` only at an intentional training graph boundary.
+
+### Batched policy forwards and capacity presets
+
+`RecurrentPolicy` shares the same weights and recurrent computation between
+sequential callbacks and `forward_batch`. The named capacities keep the existing
+architecture: one thought Linear, one Working Memory GRUCell, one circulating
+affect Linear, message/action/value Linear heads, and two Entity Memory GRUCells
+(callback and resolved-encounter updates). Thought width equals Working Memory
+width. All presets retain all components; no extra observations or labels are
+introduced. The scalar critic reads the updated private Working Memory.
+
+Exact shared parameter counts at `appearance_dim=8`, `vocabulary_size=4`,
+`max_message_length=3` are:
+
+| Preset | Working Memory / thought | Affect | Entity Memory value | Parameters |
+| --- | ---: | ---: | ---: | ---: |
+| Small | 16 | 4 | 16 | 10,987 |
+| Medium | 128 | 32 | 64 | 278,823 |
+| Large | 512 | 128 | 256 | 4,211,847 |
+
+Use `RecurrentPolicy.from_preset(8, "large")` or the configuration files
+`configs/policy-small.toml`, `configs/policy-medium.toml`, and
+`configs/policy-large.toml`. These files set only the three capacity dimensions;
+other settings use the existing experiment defaults. Existing CLI dimension
+flags override them, for example:
+
+```bash
+python -m self_genesis train --config configs/policy-large.toml \
+  --device auto --episodes 1 --survival-horizon 10 --output large.jsonl
+```
+
+Python preset construction also accepts explicit dimension/channel overrides.
+`network.parameter_count` computes the actual count after those overrides,
+excluding per-agent state. Training summaries, recorded episode starts, and
+comparison training runs report that count alongside the configured dimensions.
+Changing Appearance/channel dimensions or disabling Entity Memory changes the
+count. Capacity selection does not change the existing sequential trainer into
+a batched trainer.
+
+```python
+import torch
+from self_genesis.batched_policy import BatchedObservation
+from self_genesis.policy import RecurrentPolicy
+
+network = RecurrentPolicy.from_preset(8, "large")
+state = network.initial_batch_state(2, 4, slots=4)
+observation = BatchedObservation(
+    resources=torch.ones(2, 4, 4),  # own Life/Points, partner Life/Points
+    partner_appearance=torch.zeros(2, 4, 8),  # observed Appearance, never an ID
+    first=torch.ones(2, 4, dtype=torch.bool),
+    received_message=torch.full((2, 4, 3), 4, dtype=torch.int64),
+    partner_action=torch.zeros(2, 4, dtype=torch.int64),
+)
+active = torch.tensor([[True, False, False, False], [False, True, False, False]])
+logits, values, state = network.forward_batch(
+    observation, state, communicating=True, active=active)
+print(network.parameter_count)  # 4211847
+```
+
+All observations and masks must be on the policy device; Appearance and state
+use its floating dtype. `partner_action` uses 0=unknown, 1=NOTHING, 2=GIVE.
+Message tensors contain ordered tokens with a suffix padded by `vocabulary_size`.
+Each call batches only the current callback phase across `[world, observer]`.
+The caller must preserve communication and first/second action ordering, exposing
+only actions already visible at that phase. World/observer indices route state;
+they are never network features or Entity Memory keys.
+
+Logits have shape `[world, observer, vocabulary_size]` during communication and
+`[world, observer, 2]` during action selection; values have shape
+`[world, observer]`. Inactive rows return zero outputs and preserve all state.
+Sample only active rows; a zero-length channel produces no message decision,
+although its callback still updates recurrent state, as in the sequential API.
+
+After gifts resolve, call `complete_encounter_batch(observation, state,
+action=actions, gave=gave, received=received, active=active)` and retain its result.
+Here `actions` is int64 (0=NOTHING, 1=GIVE), gift outcomes are boolean, and all three
+have shape `[world, observer]`. The observation may now reveal the partner's final
+action. Completion updates only Appearance memory, without advancing Working
+Memory or affect. Equal Appearances share entries. Reserve sufficient entity
+slots for all distinct partners; overflow raises rather than evicting memories.
+
+Use `state.reset(completed_worlds)` with a boolean `[world]` mask at episode
+boundaries, and `state.detach()` only at an explicit optimizer boundary. Updates
+preserve old states and recurrent gradients across encounters and callbacks.
+CPU/CUDA parity tests compare batched outputs, completion writes and parameter
+gradients with sequential callbacks; they also check masks, private gradients,
+reset/detach, disabled memory and empty channels. No throughput or learning
+improvement is claimed by these policy primitives.

@@ -1,0 +1,21 @@
+test_controlled_multi_pair_training_traces_and_memory (test_density_training_parity.DensityTrainingParityTests.test_controlled_multi_pair_training_traces_and_memory) ... ok
+test_no_pair_traces_and_counters_at_death_and_horizon (test_density_training_parity.DensityTrainingParityTests.test_no_pair_traces_and_counters_at_death_and_horizon) ... ok
+test_batched_trace_sampling_after_independent_world_reset (test_training_logging.TrainingLoggingTests.test_batched_trace_sampling_after_independent_world_reset) ... ok
+test_cpu_measurements (test_training_logging.TrainingLoggingTests.test_cpu_measurements) ... ok
+test_cuda_measurements (test_training_logging.TrainingLoggingTests.test_cuda_measurements) ... ok
+test_metric_denominators_and_pre_update_gradient_norm (test_training_logging.TrainingLoggingTests.test_metric_denominators_and_pre_update_gradient_norm) ... ok
+test_sampling_does_not_change_updates_or_aggregate_metrics (test_training_logging.TrainingLoggingTests.test_sampling_does_not_change_updates_or_aggregate_metrics) ... ok
+test_sampling_validation_and_toml (test_training_logging.TrainingLoggingTests.test_sampling_validation_and_toml) ... ok
+test_unsampled_scalar_never_serializes_memory_and_evaluation_stays_full (test_training_logging.TrainingLoggingTests.test_unsampled_scalar_never_serializes_memory_and_evaluation_stays_full) ... ok
+test_both_executors_use_current_population_and_advance_once (test_encounter_density.EncounterDensityTests.test_both_executors_use_current_population_and_advance_once) ... ok
+test_cli_records_density_in_both_training_paths (test_encounter_density.EncounterDensityTests.test_cli_records_density_in_both_training_paths) ... ok
+test_comparison_tracks_each_partner_at_all_requested_densities (test_encounter_density.EncounterDensityTests.test_comparison_tracks_each_partner_at_all_requested_densities) ... ok
+test_cuda_density_training (test_encounter_density.EncounterDensityTests.test_cuda_density_training) ... ok
+test_toml_overrides_conflicts_and_preserved_conditions (test_encounter_density.EncounterDensityTests.test_toml_overrides_conflicts_and_preserved_conditions) ... ok
+test_validation_resolution_and_serialization (test_encounter_density.EncounterDensityTests.test_validation_resolution_and_serialization) ... ok
+test_zero_density_leaves_parameters_and_optimizer_untouched (test_encounter_density.EncounterDensityTests.test_zero_density_leaves_parameters_and_optimizer_untouched) ... ok
+
+----------------------------------------------------------------------
+Ran 16 tests in 14.752s
+
+OK

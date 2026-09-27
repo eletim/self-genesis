@@ -118,7 +118,7 @@ class RunRecorder:
         participants = sorted(
             (index for index, policy in enumerate(policies) if policy.decisions),
             key=lambda index: not policies[index].decisions[0].observation.first)
-        # Restore protocol order: both messages, then both actions.
+        # Group messages before actions, preserving each pair's dependency order.
         for phase in range(2):
             for index in participants:
                 decision = policies[index].decisions[phase]
@@ -147,6 +147,7 @@ class RunRecorder:
                 })
         self._write(
             "step", step=collector.elapsed_steps, participants=participants,
+            pairs=collector.protocol.last_pairs,
             callbacks=callbacks,
             entity_memory_completions=[dict(agent=index, **policies[index].completion)
                                        for index in participants
@@ -213,9 +214,13 @@ class BatchedTraceRecorder:
                 return tensor[world].detach().cpu().tolist()
 
             state = result.state
+            participants = row(result.pairs)
             self.write(
                 "batch_trace", update=self.update, world=world, step=step,
-                participants=row(result.pairs),
+                participants=participants,
+                pairs=[participants[offset:offset + 2]
+                       for offset in range(0, len(participants), 2)
+                       if participants[offset] >= 0],
                 decisions=[dict(communicating=d.communicating, active=row(d.active),
                                 choice=row(d.choice),
                                 observation={name: row(value) for name, value

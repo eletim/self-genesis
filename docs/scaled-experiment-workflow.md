@@ -1,4 +1,4 @@
-# v0.0.7 capacity, throughput, and behavior workflow
+# Capacity, encounter density, throughput, and behavior workflow
 
 v0.0.7 validates scalable execution of the existing survival experiment. It does
 not establish that larger policies learn cooperation, reciprocity, useful
@@ -8,6 +8,17 @@ reference parity, execution throughput, and held-out learned behavior. The
 and [RTX 5090 evidence](rtx5090-scaling.md) address the first two. The
 [bounded v0.0.6 behavioral evidence](entity-memory-experiment.md) remains historical;
 it is not a held-out result for large or batched v0.0.7 training.
+
+For v0.0.8, [Issue #58](https://github.com/eletim/self-genesis/issues/58) supplies
+the motivation: sparse encounters may limit the pressure to learn partner-specific
+memory. Its description of earlier large-scale learning and memory use is not
+validated by the repository's v0.0.7 throughput evidence. The retained
+[controlled density results](controlled-density-comparison.md) below provide a
+separate, bounded behavioral test. Encounter density is the sole experimental
+change across densities within each learned architecture: keep network widths,
+Actor-Critic coefficients, survival-only reward, renewable world, recurrent state
+structures and communication fixed. Hidden traits and identity labels remain
+analysis/oracle-only; no social reward or supervised target is added.
 
 ## Record conditions and verify capacity
 
@@ -97,15 +108,92 @@ norm. Timing includes diagnostics and sampled trace I/O; match tracing settings
 when comparing rates. `batch_trace` snapshots are not complete relationship
 histories and cannot be passed to `examples/analyze_run.py`.
 
+## Reproduce the controlled density experiment
+
+After environment setup above, use a CUDA-capable PyTorch interpreter and fresh
+output directories. The retained run used Python 3.12.14, PyTorch 2.7.1+cu128 and
+CUDA 12.8 on an RTX 5090. Verify existing evidence on CPU without retraining:
+
+```sh
+PYTHONPATH=src:. python examples/verify_density_comparison.py \
+  > /tmp/density-retained-summary.json
+```
+
+Reproduce the fixed [configuration](../configs/controlled-density.toml) and verify
+the new reports with the same verifier:
+
+```sh
+PYTHONPATH=src CUBLAS_WORKSPACE_CONFIG=:4096:8 python \
+  examples/run_density_comparison.py --output /tmp/controlled-density-replay
+PYTHONPATH=src:. python examples/verify_density_comparison.py \
+  /tmp/controlled-density-replay > /tmp/density-replay-summary.json
+```
+
+The runner fixes one CPU thread, deterministic FP32, small capacity, 32 agents,
+128 worlds, 50 complete-batch optimizer updates and horizon 32. It varies only
+requested pairs (1/4/8/16), independently training enabled and disabled Entity
+Memory at seeds 10000/20000/30000. Compare densities within each architecture;
+disabling memory changes parameter count (10,987 to 3,051). World seeds are
+`seed + update * 128 + row`; held-out seeds 100000/100001/100002 are disjoint.
+All four memory/Appearance interventions and always-GIVE, always-NOTHING and
+producer-oracle baselines use matched evaluation worlds. Actual frozen weights
+are evaluated sequentially in FP32; training logs are not checkpoints.
+
+The declared budget is 24 training runs, 1,200 updates, 153,600 world episodes
+and 468 evaluations, with a 900-second limit per density. Equal episodes do not
+mean equal encounters or compute. Preserve the manifest, failures, compressed
+reports and hashes; the verifier checks settings, seeds, exposure counts,
+recomputed summaries and matched intervention deltas. It validates report
+consistency, not exact cross-version numerical replay.
+
+For operating measurements, rerun the separate shorter-horizon benchmark:
+
+```sh
+python examples/benchmark_rtx5090.py --sweep density \
+  --capacity small --precision fp32 --world-counts 64 128 256 \
+  --output /tmp/density-throughput --updates 20 --warmup 1 --horizon 16 --seed 42
+```
+
+The [12-case density benchmark and 100-update stability run](rtx5090-density.md)
+support **256 worlds for small/FP32/horizon 16** as the fastest tested batch at
+every density, not a global optimum. At 16 pairs, measured throughput was 7,560
+world steps/s and 110,779 encounters/s, sampled GPU utilization 50.7% mean/59%
+maximum and peak device memory 3.11 GiB (allocated/reserved 2.08/2.17 GiB).
+All measured updates remained finite with no OOM or timeout; the stability run
+showed bounded allocator use, not long-duration stability. Keep 128 worlds for
+the declared horizon-32 behavioral reproduction. Larger capacities, BF16, longer
+horizons and tracing require their own measurements.
+
+The [retained behavioral reports and per-seed tables](controlled-density-comparison.md)
+show main learned mean lifetime rising from 10.3646 at one pair to 14.7986 at
+16 pairs, with more repeat encounters. Every main learned seed stayed below
+always-GIVE at its density. Both architectures remained mixed-GIVE; Entity
+Memory reset gave zero lifetime delta in 11 of 12 main learned seed/density
+summaries and +0.0104 in the other. Appearance and Working Memory effects were
+mixed, with no consistent producer/history selection. Density changes both
+training and evaluation opportunities, so these gains do not isolate learning
+from additional aid opportunities. Three training seeds, sparse history bins,
+within-encounter updates under reset and trajectory divergence under interventions
+limit interpretation. Token entropy measures usage, not useful communication.
+
+Report null and collapsed outcomes without selecting favorable seeds or extending
+the budget after viewing results. GIVE fractions at or below 0.05 are
+near-always-NOTHING, at or above 0.95 near-always-GIVE; otherwise mixed. No action
+callbacks and absent history bins are missing evidence, not zero selection.
+Retain denominators, successful aid, censoring, first/repeat producer contrasts,
+prior-aid contrasts and every intervention delta. Mixed actions alone do not
+establish learned selection, and null interventions do not prove memory is unused.
+
 ## Held-out capacity and Entity Memory comparison
 
-The existing `compare` command trains sequential FP32 policies and evaluates
-frozen weights; it rejects `--batched`. Training JSONL does not save a loadable
-checkpoint, and `compare` does not import a preceding batched run. Thus the
-procedure below evaluates sequential capacity variants, not the policies from
-the throughput sweep. Evaluating batched-trained weights requires a separate
-Python experiment retaining the network and calling `evaluate_policy`; it is
-not supplied by this CLI workflow.
+The `compare` command defaults to sequential FP32 training. Add `--batched`
+and `--num-worlds` to train batched policies and evaluate their actual frozen
+weights through the same sequential FP32 evaluator. Batched comparisons require
+explicit held-out evaluation seeds disjoint from all training world seeds. See
+[the density evaluation command](../README.md#batched-trained-density-evaluation)
+for a reproducible example. Training JSONL does not save a loadable checkpoint;
+comparison reruns training in memory. The procedure below uses sequential capacity
+variants, not the policies from the throughput sweep.
 
 Choose budgets and disjoint training/evaluation seeds before viewing results.
 This small two-update command is a smoke test, not a convergence experiment:

@@ -43,6 +43,7 @@ class World:
     """
 
     def __init__(self, config: ExperimentConfig, *, seed_rng: bool = True):
+        self.config = config
         self.state = initialize(config, seed_rng=seed_rng)
         # CPU draws match across devices without consuming other sampling streams.
         self._generation_rng = torch.Generator(device="cpu").manual_seed(config.seed + 2)

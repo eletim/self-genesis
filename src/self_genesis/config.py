@@ -18,6 +18,8 @@ class ExperimentConfig:
     seed: int = 0
     device: str = "cpu"
     num_agents: int = 4
+    encounter_count: int | None = None
+    encounter_fraction: float | None = None
     appearance_dim: int = 8
     initial_life: int = 10
     initial_points: int = 3
@@ -44,6 +46,17 @@ class ExperimentConfig:
     trace_step_interval: int = 1
 
     def __post_init__(self) -> None:
+        if self.encounter_count is not None and self.encounter_fraction is not None:
+            raise ValueError("encounter_count and encounter_fraction are mutually exclusive")
+        if self.encounter_fraction is not None:
+            value = self.encounter_fraction
+            if type(value) not in (int, float) or not 0 <= value <= 1 or not math.isfinite(value):
+                raise ValueError("encounter_fraction must be a finite number between 0 and 1")
+        elif self.encounter_count is None:
+            object.__setattr__(self, "encounter_count", 1)
+        if self.encounter_count is not None and (
+                type(self.encounter_count) is not int or self.encounter_count < 0):
+            raise ValueError("encounter_count must be a nonnegative integer")
         for name in ("batched", "deterministic"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be a boolean")
@@ -94,6 +107,12 @@ class ExperimentConfig:
             raise ValueError("seed must be less than 2**63")
         if self.device not in ("cpu", "cuda", "auto"):
             raise ValueError("device must be cpu, cuda, or auto")
+
+    def encounter_pairs(self, living: int) -> int:
+        """Resolve density from the current living population, including zero."""
+        if self.encounter_fraction is not None:
+            return math.floor(self.encounter_fraction * living / 2)
+        return min(self.encounter_count, living // 2)
 
 
 def load_config(path: Path | None = None, **overrides: object) -> ExperimentConfig:

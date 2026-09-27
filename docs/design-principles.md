@@ -13,7 +13,7 @@ self-genesis は、複数の学習Agentが他者との相互作用を通じて�
 
 本書と[代表シナリオ](representative-scenarios.md)は、
 [Issue #15](https://github.com/eletim/self-genesis/issues/15)で導入する環境の契約を定める。
-再生成・有限horizon・解析ログを含むこの環境契約はv0.0.5 / v0.0.6 / v0.0.7でも維持する。
+再生成・有限horizon・解析ログを含むこの環境契約はv0.0.5 / v0.0.6 / v0.0.7 / v0.0.8でも維持する。
 v0.0.3の初期Pointを使い切る環境と比較し、他者を区別して過去の関係を利用することが
 生存上有利になり得る環境圧を調べる。援助相手の選別や協力が必ず学習されるとは仮定しない。
 
@@ -108,6 +108,63 @@ world数・容量ごとにsteps / encounters / episodes per second、wall-clock�
 GPU utilization・powerを実測し、速度と学習結果を分けて評価する。
 解析ログや介入結果は引き続きReward・教師信号・policy inputへ戻さない。
 
+## v0.0.8 のEncounter density契約（Issue #58）
+
+[Issue #58](https://github.com/eletim/self-genesis/issues/58)では、1 world step内の
+Encounter数だけを変更し、反復Encounterが関係記憶の学習圧を強めるかを調べる。
+以下は設計契約であり、この文書変更自体は複数Encounterの実装完了を意味しない。
+密度による生存時間の増加だけでは、相手選別やEntity Memory利用の獲得を示さない。
+
+### 密度設定とランダムmatching
+
+- step開始時の各worldの生存個体数をLとし、可能なpair数の上限をM = floor(L / 2)とする。
+  設定はpair数のcountか、生存個体の参加割合fractionのどちらか一方とする。
+  両方の明示指定はエラーとし、未指定ならcount = 1（従来の1 pair / step）とする。
+- countは0以上の整数とし、実際のpair数K = min(count, M)とする。
+  fractionは有限の0以上1以下の数とし、K = floor(fraction × L / 2)とする。
+  小数部分は切り捨て、最低1 pairへの切り上げはしない。fractionは初期個体数ではなく、
+  毎stepの生存個体数に適用する。負数、非整数count、範囲外・非有限fractionはエラーとする。
+- 生存集合を一様ランダムに並べ替え、先頭2K体を隣接する2体ずつのpairにするなど、
+  重複なしのランダムmatchingを行う。各pairの先手・後手もランダムとする。
+  個体番号、Appearance、生成能力、行動履歴による相手選択や役割固定は行わない。
+  各個体の参加は1 stepに最大1 Encounterで、worldをまたぐpairは作らない。
+- 奇数の生存集合では少なくとも1体が非参加となる。Lが0または1ならK = 0とする。
+  count = 0やfractionの切り捨てでK = 0になる場合も、未終了worldの時間は1 step進む。
+  次stepでは新しい生存集合から再抽選し、同じ相手との再Encounterを禁止も保証もしない。
+  seedと密度設定から各実行方式で再現できるようにする。
+
+### 複数pairでもworldの時計は1つ
+
+全pairが同じstep開始時のLife / Pointを観測する。各pair内では既存の
+message → reply → first action → second actionを維持し、後手のみが選択時に
+先手の行動を観測する。他pairのmessage・行動・結果は入力へ追加しない。
+全pairの行動が揃ってから、第4節のGIVEをworld全体で同時に解決する。
+pairごとにLife減少やPoint生成を挟まず、pairの処理順序で資源結果を変えない。
+
+各未終了world stepにつき、Life減少・死亡判定、残存個体のPoint生成抽選、
+開始時生存個体への1のsurvival Reward、step / horizon時計の進行はそれぞれ1回だけとする。
+非参加個体にも同じ規則を適用し、Encounter数倍の生成・Rewardや時間経過を作らない。
+非参加個体に架空のCommunication・decision・Encounter完了の記憶書き込みを作らない。
+終了済みworldは従来どおり停止し、資源・Reward・時計を進めない。
+
+### 変更しない学習・情報境界
+
+v0.0.7のbatched GPU-native実行、Small / Medium / Large容量、NN構造、
+Actor-Critic係数と完全episodeのsurvival-only目的関数を維持する。
+decision数が増えてもlossの開始時Agent数による正規化とepisode平均を変更せず、
+PPO、social reward、補助教師信号、Value bootstrap、truncated BPTTを導入しない。
+renewable Point、hidden generation ability、有限horizonと死亡の区別も維持する。
+
+Working Memory・感性はEncounterをまたぐ個体固有の循環状態とし、Encounter-local化しない。
+Appearance-keyed Entity Memoryの検索・完了書き込みは第8節のparticipant-visibleな
+経験だけを使い、他pairや他worldの経験を混ぜない。episode境界のresetを維持する。
+world / Agent / slot番号、hidden trait、生成量、解析履歴、oracle情報をActor / Criticへ
+直接にも記憶経由にも渡さず、Communicationやidentityの意味を教師として与えない。
+
+逐次referenceとbatched実行でmatching・役割・選択結果・生成抽選を揃え、
+重複参加がないこと、同時GIVE、死亡・horizon、Rewardと記憶の情報境界を比較する。
+既定の1 pair、複数pair、奇数人口、人口減少、0 pair・単独生存を検証対象とする。
+
 ## 1. シンプルさを優先する
 
 最初の実験では、必要最小限の世界・Agent・学習系だけを実装する。
@@ -161,9 +218,10 @@ GIVE、会話、協力、返報などの特定行動に、
 1 world stepの順序は次のとおりとする。
 
 1. step開始時の生存集合とLife / Pointを確定する。
-   その集合からランダムなEncounterと先手・後手を選び、観測・Communication・行動選択を行う。
+   その集合から密度設定に従う重複なしのランダムなpair群と先手・後手を選び、
+   各Encounterで観測・Communication・行動選択を行う（既定は最大1 pair）。
    資源値はこの間更新しない。後手が先手の選択行動を観測する既存手順は維持する。
-2. GIVEを同時に解決する。開始時に送り手と受け手が生存し、送り手に1 Point以上あれば、
+2. 全EncounterのGIVEを同時に解決する。開始時に送り手と受け手が生存し、送り手に1 Point以上あれば、
    1 Pointを消費して相手のLifeを1回復する。Point不足のGIVEは効果も消費もない。
    Encounterに選ばれなかった個体はNOTHINGとなる。
 3. 開始時に生存していた全個体のLifeを1減らし、0になった個体の死亡を確定する。
@@ -176,7 +234,8 @@ GIVE、会話、協力、返報などの特定行動に、
    episodeを終了できる契約とする。horizon到達は死亡と区別し、生存中の個体の寿命は打ち切りとして扱う。
    horizon自体や残ったPointへの追加Rewardは与えない。
 
-生存個体が2体未満でEncounterがなくても、Life減少・死亡判定・再生成・survival Rewardは進む。
+未終了worldでは、密度設定や生存個体が2体未満のためEncounterがなくても、
+Life減少・死亡判定・再生成・survival Rewardは1 stepにつき1回進む。
 各個体のstep後Pointは「step開始時Point − 成功したGIVEの消費 + 実際の生成量」となる。
 
 ## 5. 他者には固定Appearanceを持たせる

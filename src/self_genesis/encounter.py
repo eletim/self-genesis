@@ -44,7 +44,7 @@ class Policy(Protocol):
 
 
 class EncounterProtocol:
-    """Sample one ordered living pair per world step using an isolated RNG.
+    """Sample disjoint ordered living pairs per world step using an isolated RNG.
 
     First sends a message, then second replies. Both then choose an action,
     first before second. Second can observe first's chosen action. Gifts and
@@ -88,7 +88,7 @@ class EncounterProtocol:
 
         Empty messages are allowed. Tokens have no assigned meaning or effect
         on rewards. Invalid messages/actions leave world state unchanged.
-        With fewer than two survivors, time advances without policy calls.
+        With zero selected pairs, time advances without policy calls.
         After resolution, participants with a complete_encounter callback receive
         local experience, including the second action and successful gifts.
         """
@@ -97,8 +97,11 @@ class EncounterProtocol:
             raise ValueError("Provide exactly one policy per agent")
         decisions = [Decision() for _ in policies]
         living = self.world.alive.nonzero().flatten().tolist()
-        if len(living) >= 2:
-            first, second = self._random.sample(living, 2)
+        count = self.world.config.encounter_pairs(len(living))
+        selected = self._random.sample(living, 2 * count) if count else []
+        self.last_pairs = tuple(zip(selected[::2], selected[1::2]))
+        completions = []
+        for first, second in self.last_pairs:
 
             message = self._message(policies[first].communicate(
                 self._observe(first, second, first=True)))
@@ -117,17 +120,19 @@ class EncounterProtocol:
                 (first, second, first_action), (second, first, second_action),
             ):
                 decisions[agent] = Decision(action, partner if action is Action.GIVE else None)
-        result = self.world.step(decisions)
-        if len(living) >= 2:
-            for agent, partner, observation, action, partner_action in (
+            completions.extend((
                 (first, second, first_observation, first_action, second_action),
                 (second, first, second_observation, second_action, first_action),
-            ):
-                # Completion is optional for fixed and external policies.
-                complete = getattr(policies[agent], "complete_encounter", None)
-                if complete is not None:
-                    complete(EncounterExperience(
-                        replace(observation, partner_action=partner_action), action,
-                        (agent, partner) in result.successful_transfers,
-                        (partner, agent) in result.successful_transfers))
+            ))
+        result = self.world.step(decisions)
+        # Index once to avoid scanning all transfers for every participant.
+        transfers = set(result.successful_transfers)
+        for agent, partner, observation, action, partner_action in completions:
+            # Completion is optional for fixed and external policies.
+            complete = getattr(policies[agent], "complete_encounter", None)
+            if complete is not None:
+                complete(EncounterExperience(
+                    replace(observation, partner_action=partner_action), action,
+                    (agent, partner) in transfers,
+                    (partner, agent) in transfers))
         return result

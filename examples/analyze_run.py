@@ -50,6 +50,7 @@ def analyze(path):
                     'token_counts': summary['token_counts'],
                     'final_life': summary['life'], 'final_points': summary['points'],
                     'relationship_actions': relationships.rows,
+                    'encounter_exposure': relationships.encounter_exposure(),
                     'partner_history_metrics': partner_history_metrics(relationships.rows),
                 }
                 episodes += 1

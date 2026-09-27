@@ -55,17 +55,35 @@ class Telemetry:
             self.stop.wait(0.2)
 
 
+def benchmark_config(args):
+    """Resolve a worker workload without changing its training or resource rules."""
+    return load_config(None, capacity_preset=args.capacity, device='cuda',
+                       seed=args.seed, batched=args.worlds > 0,
+                       num_worlds=max(1, args.worlds), mixed_precision=args.precision,
+                       num_agents=args.num_agents, encounter_count=args.encounter_count,
+                       survival_horizon=args.horizon, episodes=args.warmup + args.updates,
+                       point_generation_probability_min=0.1,
+                       point_generation_probability_max=0.3)
+
+
+def sweep_cases(args):
+    if args.sweep == 'density':
+        # Capacity and precision stay fixed within this 32-agent comparison.
+        return [(args.capacity, args.precision, worlds, 32, pairs)
+                for pairs in (1, 4, 8, 16) for worlds in args.world_counts]
+    return [(capacity, precision, worlds, 4, 1)
+            for capacity in ('small', 'medium', 'large')
+            for precision, worlds in ([('fp32', 0)] + [
+                (precision, worlds) for precision in ('fp32', 'bf16')
+                for worlds in (64, 128, 256, 512, 1024)])]
+
+
 def worker(args):
     if not torch.cuda.is_available() or 'RTX 5090' not in torch.cuda.get_device_name(0):
         raise RuntimeError('This evidence runner requires an actual RTX 5090 at CUDA device 0')
     torch.set_num_threads(1)
     torch.manual_seed(args.seed)
-    config = load_config(None, capacity_preset=args.capacity, device='cuda',
-                        seed=args.seed, batched=args.worlds > 0,
-                        num_worlds=max(1, args.worlds), mixed_precision=args.precision,
-                        survival_horizon=args.horizon, episodes=args.warmup + args.updates,
-                        point_generation_probability_min=0.1,
-                        point_generation_probability_max=0.3)
+    config = benchmark_config(args)
     network = RecurrentPolicy(config.appearance_dim, memory_dim=config.memory_dim,
                               affect_dim=config.affect_dim,
                               entity_memory_dim=config.entity_memory_dim).cuda()
@@ -131,6 +149,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--sweep', choices=['scaling', 'density'], default='scaling')
+    parser.add_argument('--world-counts', type=int, nargs='+', default=[64, 128, 256],
+                        help='positive world counts for the 32-agent density sweep')
+    parser.add_argument('--num-agents', type=int, default=4, help=argparse.SUPPRESS)
+    parser.add_argument('--encounter-count', type=int, default=1, help=argparse.SUPPRESS)
     parser.add_argument('--capacity', choices=['small', 'medium', 'large'], default='small')
     parser.add_argument('--precision', choices=['fp32', 'bf16'], default='fp32')
     parser.add_argument('--worlds', type=int, default=64, help='0 selects sequential FP32')
@@ -142,33 +165,35 @@ def main():
     args = parser.parse_args()
     if min(args.updates, args.horizon, args.timeout) < 1 or min(args.warmup, args.worlds) < 0:
         parser.error('updates, horizon, timeout must be positive; warmup and worlds nonnegative')
+    if any(world < 1 for world in args.world_counts) or len(set(args.world_counts)) != len(args.world_counts):
+        parser.error('world-counts must be positive and unique')
     if args.worker:
         result = worker(args)
         with args.output.open('x') as file:
             json.dump(result, file, allow_nan=False, sort_keys=True)
         return
     args.output.mkdir(parents=True, exist_ok=False)
-    for capacity in ('small', 'medium', 'large'):
-        cases = [('fp32', 0)] + [(precision, worlds) for precision in ('fp32', 'bf16')
-                                for worlds in (64, 128, 256, 512, 1024)]
-        for precision, worlds in cases:
-            name = f'{capacity}-{precision}-{worlds}'
-            command = [sys.executable, __file__, '--worker', '--output', str(args.output / (name + '.json')),
-                       '--capacity', capacity, '--precision', precision, '--worlds', str(worlds),
-                       '--updates', str(args.updates), '--warmup', str(args.warmup),
-                       '--horizon', str(args.horizon), '--seed', str(args.seed)]
-            start = time.perf_counter()
-            try:
-                completed = subprocess.run(command, capture_output=True, text=True, timeout=args.timeout)
-                status = 'ok' if completed.returncode == 0 else 'failed'
-                error = completed.stderr
-            except subprocess.TimeoutExpired:
-                status, error = 'timeout', f'Exceeded {args.timeout} seconds'
-            manifest = dict(case=name, status=status, process_seconds=time.perf_counter() - start,
-                            command=command, error=error)
-            with (args.output / 'manifest.jsonl').open('a') as file:
-                file.write(json.dumps(manifest) + '\n')
-            print(name, status, round(manifest['process_seconds'], 2), flush=True)
+    for capacity, precision, worlds, agents, pairs in sweep_cases(args):
+        name = f'{capacity}-{precision}-{worlds}'
+        if args.sweep == 'density':
+            name += f'-agents{agents}-pairs{pairs}'
+        command = [sys.executable, __file__, '--worker', '--output', str(args.output / (name + '.json')),
+                   '--capacity', capacity, '--precision', precision, '--worlds', str(worlds),
+                   '--num-agents', str(agents), '--encounter-count', str(pairs),
+                   '--updates', str(args.updates), '--warmup', str(args.warmup),
+                   '--horizon', str(args.horizon), '--seed', str(args.seed)]
+        start = time.perf_counter()
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=args.timeout)
+            status = 'ok' if completed.returncode == 0 else 'failed'
+            error = completed.stderr
+        except subprocess.TimeoutExpired:
+            status, error = 'timeout', f'Exceeded {args.timeout} seconds'
+        manifest = dict(case=name, status=status, process_seconds=time.perf_counter() - start,
+                        command=command, error=error)
+        with (args.output / 'manifest.jsonl').open('a') as file:
+            file.write(json.dumps(manifest) + '\n')
+        print(name, status, round(manifest['process_seconds'], 2), flush=True)
 
 
 if __name__ == '__main__':

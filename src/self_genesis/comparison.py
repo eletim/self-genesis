@@ -11,13 +11,15 @@ from self_genesis.analysis import (RelationshipAnalysis, action_metrics,
                                    partner_history_metrics,
                                    communication_metrics, evaluation_summary,
                                    relationship_metrics)
+from self_genesis.batched_rollout import BatchedRolloutCollector
 from self_genesis.config import ExperimentConfig
 from self_genesis.encounter import EncounterProtocol, Observation
 from self_genesis.experiment import resolve_device
 from self_genesis.observation import entity_memory_record
 from self_genesis.policy import AgentPolicy, PolicyState, RecurrentPolicy
 from self_genesis.rollout import RolloutCollector
-from self_genesis.training import train_episode
+from self_genesis.training import (train_episode, train_batch, reproducible_execution,
+                                   _validate_mixed_precision)
 from self_genesis.world import Action, World
 
 
@@ -220,7 +222,7 @@ def evaluate_policy(config: ExperimentConfig,
         memory_history.extend(dict(step=step, **event) for event in memory_events)
         relationships.record_step(dict(
             step=step, participants=[c['agent'] for c in callbacks if c['phase'] == 'action'],
-            callbacks=callbacks,
+            callbacks=callbacks, pairs=protocol.last_pairs,
             successful_transfers=[dict(donor=a, recipient=b)
                                   for a, b in result.successful_transfers],
             generated_points=result.generated_points.tolist()))
@@ -251,6 +253,7 @@ def evaluate_policy(config: ExperimentConfig,
         **action_metrics(rows), relationship_actions=rows, history_key="actual_partner",
         relationship_metrics=relationship_metrics(rows),
         partner_history_metrics=partner_history_metrics(rows),
+        encounter_exposure=relationships.encounter_exposure(),
         entity_memory_events=memory_history,
         communication_messages=messages,
         communication=communication_metrics([row['message'] for row in messages],
@@ -260,6 +263,12 @@ def evaluate_policy(config: ExperimentConfig,
 def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=None,
                    training_seeds=None, interventions=()) -> dict:
     """Independently train each seed and evaluate matched frozen populations."""
+    with reproducible_execution(config):
+        return _run_comparison(config, output, evaluation_seeds=evaluation_seeds,
+                               training_seeds=training_seeds, interventions=interventions)
+
+
+def _run_comparison(config, output, *, evaluation_seeds, training_seeds, interventions):
     _budget(config)
     seeds = [config.seed] if evaluation_seeds is None else list(evaluation_seeds)
     train_seeds = [config.seed] if training_seeds is None else list(training_seeds)
@@ -271,9 +280,18 @@ def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=N
     if len(set(interventions)) != len(interventions) or any(
             item not in INTERVENTIONS for item in interventions):
         raise ValueError("Interventions must be unique supported names")
-    conditions = [replace(config, seed=seed) for seed in seeds]
     training_conditions = [replace(config, seed=seed) for seed in train_seeds]
+    if config.batched:
+        if evaluation_seeds is None:
+            raise ValueError("Batched comparison requires explicit held-out evaluation_seeds")
+        # Match train's complete world-seed schedule, including wraparound.
+        span = config.episodes * config.num_worlds
+        if any((seed - start) % 2**63 < span for seed in seeds for start in train_seeds):
+            raise ValueError("Evaluation seeds must be held out from every batched training world")
+    conditions = [replace(config, seed=seed, batched=False, mixed_precision="fp32",
+                          trace_worlds=()) for seed in seeds]
     device = resolve_device(config.device)
+    _validate_mixed_precision(config, device)
     # Exclusive creation prevents a repeated command from overwriting a report.
     with Path(output).open('x', encoding='utf-8') as destination:
         training_runs, evaluations, summaries, effects = [], [], [], []
@@ -291,13 +309,29 @@ def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=N
                     max_message_length=config.max_message_length,
                     memory_dim=config.memory_dim, affect_dim=config.affect_dim,
                     entity_memory_dim=dimension).to(device)
-                collector = RolloutCollector(learning_config, network)
                 optimizer = torch.optim.Adam(network.parameters(), lr=config.learning_rate)
-                updates = [asdict(train_episode(collector, optimizer)) for _ in range(config.episodes)]
+                training_metadata = {}
+                if config.batched:
+                    world_seeds = [[(learning_config.seed + update * config.num_worlds + row)
+                                    % 2**63 for row in range(config.num_worlds)]
+                                   for update in range(config.episodes)]
+                    collector = BatchedRolloutCollector(learning_config, network,
+                                                        seeds=world_seeds[0])
+                    updates = [asdict(train_batch(collector, optimizer, seeds=batch))
+                               for batch in world_seeds]
+                    training_metadata = dict(world_seeds=world_seeds,
+                                             random_algorithm="philox4x32-10")
+                else:
+                    collector = RolloutCollector(learning_config, network)
+                    updates = [asdict(train_episode(collector, optimizer))
+                               for _ in range(config.episodes)]
                 training_runs.append(dict(seed=learning_config.seed, policy=name,
                                           config=asdict(learning_config), updates=updates,
-                                          parameter_count=network.parameter_count))
+                                          parameter_count=network.parameter_count,
+                                          **training_metadata))
+                optimizer.zero_grad(set_to_none=True)
                 network.eval()
+                network.requires_grad_(False)
                 learned.append((name, network))
             for condition in conditions:
                 for name, policy in [*learned, ("always-GIVE", Action.GIVE),
@@ -323,6 +357,11 @@ def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=N
                             mean_observed_lifetime_delta=(after['mean_observed_lifetime']
                                                           - before['mean_observed_lifetime']),
                             censored_delta=after['censored'] - before['censored'],
+                            prior_aid_give_difference_delta=_difference(
+                                after['prior_aid_give_difference'], before['prior_aid_give_difference']),
+                            repeat_minus_first_producer_difference_delta=_difference(
+                                after['partner_history_metrics']['repeat_minus_first_producer_difference'],
+                                before['partner_history_metrics']['repeat_minus_first_producer_difference']),
                             give_ratio_delta=(None if before['action_ratios']['GIVE'] is None
                                               or after['action_ratios']['GIVE'] is None else
                                               after['action_ratios']['GIVE'] - before['action_ratios']['GIVE'])))
@@ -336,6 +375,8 @@ def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=N
                                       intervention=intervention,
                                       **evaluation_summary(matched, config.vocabulary_size)))
         report = dict(schema_version=3, config=asdict(config),
+                      training_execution="batched" if config.batched else "sequential",
+                      evaluation_execution="sequential-fp32",
                       training=training_runs[0]['updates'] if len(train_seeds) == 1 else None,
                       training_seeds=train_seeds, training_runs=training_runs,
                       evaluation_seeds=seeds, interventions=interventions,
@@ -364,15 +405,30 @@ def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=N
                                           'encounters, then repeat minus first. Each bin reports '
                                           'callback counts and missing_bin; empty rates and '
                                           'unsupported differences are null.',
+                          encounter_exposure='Per-agent episode encounter and repeat counts include '
+                                             'zero-exposure agents. A repeat is a meeting after the '
+                                             'first with the same actual partner. Count distributions '
+                                             'use agent-episodes; same-partner distributions use all '
+                                             'directed possible partner-episodes, including unseen '
+                                             'partners at zero. Repeat fraction divides repeat action '
+                                             'callbacks by all encounter action callbacks; null if empty.',
                           communication='Counts and empirical token entropy over sent messages, '
                                         'including empty-message callbacks. These measure channel '
                                         'usage, not causal utility.',
                           effects='Intervention minus matched untreated learned evaluation. '
                                   'Sampling streams restart; trajectories may diverge after actions '
-                                  'or survival differ. Interventions are evaluated separately.'),
+                                  'or survival differ. Interventions are evaluated separately. '
+                                  'Selection differences are null if either matched estimate lacks '
+                                  'a required bin; they are descriptive, not causal identification.'),
                       evaluations=evaluations, summaries=summaries, intervention_effects=effects)
         json.dump(report, destination, allow_nan=False, sort_keys=True)
         destination.write('\n')
     return dict(output=str(Path(output).resolve()), evaluation_seeds=seeds,
-                training_seeds=train_seeds, training_episodes=config.episodes * len(training_runs),
+                training_seeds=train_seeds, training_episodes=config.episodes * len(training_runs)
+                * (config.num_worlds if config.batched else 1),
                 evaluations=len(evaluations))
+
+
+def _difference(after, before):
+    """Retain missing-bin semantics in matched selection effects."""
+    return None if after is None or before is None else after - before

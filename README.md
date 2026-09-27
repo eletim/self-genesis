@@ -26,8 +26,98 @@ sequential execution and 64–1024 batched worlds, with FP32/BF16 batched traini
 At 256 worlds, FP32 measured 15,389–15,707 world steps/s versus 240–250 sequentially
 on the four-agent, horizon-16 workload. These are bounded execution measurements,
 not evidence of improved learning or social behavior. BF16 remains optional.
-`compare` trains and evaluates sequential policies; it does not load batched
-training JSONL. The behavioral evidence below predates the scaling work.
+`compare` defaults to sequential training; `compare --batched` trains batched
+policies and evaluates their frozen weights on explicit held-out seeds using
+the sequential FP32 evaluator. It does not load training JSONL. The v0.0.5/v0.0.6
+behavioral evidence below predates the scaling work; the density results are
+recorded separately.
+
+## v0.0.8 encounter-density results
+
+[Issue #58](https://github.com/eletim/self-genesis/issues/58) motivates increasing
+repeat encounters from a sparse 32-agent world. Its account of v0.0.7 large-scale
+learning and memory use is research motivation, not a result established by the
+repository's retained v0.0.7 capacity/throughput sweep. That sweep measures
+execution, not learned selection.
+
+**Encounter density is the sole experimental change** across the controlled
+1/4/8/16-pair conditions within each architecture. Network dimensions,
+Actor-Critic coefficients, survival-only reward, renewable resource rules,
+Working Memory, affect, Appearance-keyed Entity Memory and communication stay
+fixed. Hidden production abilities and identity labels remain excluded from
+policy inputs. Disjoint encounters share one simultaneous resource resolution,
+Life decay and generation step; agents cannot participate twice in that step.
+
+The [controlled multi-seed comparison](docs/controlled-density-comparison.md)
+used 32 agents, small capacity, FP32, 128 worlds per update, 50 updates and
+horizon 32, with three training and three held-out seeds. Main learned mean
+lifetimes at 1/4/8/16 pairs were **10.3646 / 11.5035 / 12.8472 / 14.7986**;
+every seed remained below always-GIVE at the same density. Repeat encounters
+increased, but Entity Memory reset had zero lifetime effect in 11 of 12
+seed/density summaries and a +0.0104 effect in the other. Identity and Working
+Memory interventions were mixed. Both learned architectures stayed mixed-GIVE,
+with no consistent density-driven producer or prior-aid selection. These are
+bounded, largely null memory findings, not evidence of learned selection.
+Denser worlds mechanically permit more aid; survival gains alone do not isolate
+learning. Missing history bins remain null, and collapsed behavior in future
+runs must be reported rather than excluded.
+
+The [density workflow](docs/scaled-experiment-workflow.md#reproduce-the-controlled-density-experiment)
+provides reproduction and evidence-verification commands. The separate
+[RTX 5090 density benchmark](docs/rtx5090-density.md) supports 256 worlds as a
+starting point only for its small/FP32/horizon-16 workload: at 16 pairs it measured
+7,560 world steps/s, 110,779 encounters/s and 3.11 GiB peak device memory.
+The behavioral comparison deliberately retains its declared 128 worlds and
+longer horizon; the benchmark does not select a learning-optimal density.
+
+## Batched-trained density evaluation
+
+Run a reproducible CPU smoke comparison with two training worlds per update:
+
+```sh
+python -m self_genesis compare --batched --deterministic --device cpu \
+  --num-worlds 2 --episodes 2 --num-agents 4 --encounter-fraction 1.0 \
+  --survival-horizon 8 --point-generation-probability-max 0.5 \
+  --training-seeds 7 17 --evaluation-seeds 101 102 \
+  --interventions entity-memory-reset appearance-shuffle appearance-replacement working-memory-reset \
+  --output /tmp/batched-density-comparison.json
+```
+
+Use a fresh output path on replay. `--encounter-count 2` can replace the fraction
+option. The configured density applies to both training and held-out evaluation;
+repeat with separate output files for other densities. `episodes` counts batched
+optimizer updates, each containing `num_worlds` complete episodes. Each enabled
+and disabled Entity Memory condition is independently trained with the existing
+batched collector, seed schedule, loss, and optimizer. The report retains those
+updates, resolved configs, and every update's `world_seeds`. Evaluation seeds are
+required and must exclude all training world seeds across every update and
+training seed (including seed wraparound).
+
+The actual trained networks stay in memory, are frozen, and enter the existing
+sequential FP32 evaluator with fresh agent state and matched baseline worlds.
+`training_execution` and `evaluation_execution` identify the two execution paths.
+Training may use supported CUDA BF16; evaluation uses FP32. Training JSONL remains
+observation data, not a checkpoint. This command reruns training rather than
+importing an earlier training log. Replays on the same software/device are the
+reproducibility target; batched and sequential RNG streams need not coincide.
+
+The report includes always-GIVE, always-NOTHING, and producer-oracle baselines,
+all requested interventions, censored survival summaries, first/repeat producer
+selection, prior-aid selection, and encounter exposure. `intervention_effects`
+contains matched lifetime, censoring, GIVE fraction, prior-aid GIVE difference,
+and repeat-minus-first producer difference deltas. Selection deltas remain null
+when a required bin is absent. These are descriptive effects: interventions can
+change later survival and encounters. Reward remains own survival only; producer
+ability and actual partner identity remain analysis/oracle-only information.
+The smoke budget establishes reproducibility, not learned social behavior.
+On CPU, the command above produced 52 evaluations from 16 training episodes.
+Every condition had mean observed lifetime 8, with all agents right-censored
+(the horizon is shorter than initial Life). For the enabled learned policies,
+pooled prior-aid GIVE differences were 0.020833 and 0.0 for training seeds 7 and
+17; repeat-minus-first producer differences were 0.05 and 0.033333. All four
+interventions had zero matched lifetime and selection deltas for these enabled
+policies. This short smoke run cannot distinguish survival performance or
+establish useful memory; use a longer horizon and training budget for that.
 
 ## v0.0.6 Entity Memory evidence
 
@@ -152,15 +242,17 @@ protocol = EncounterProtocol(world, seed=42, vocabulary_size=4, max_message_leng
 result = protocol.step([QuietPolicy() for _ in range(2)])
 ```
 
-Provide one policy per agent in state order. Each step uniformly samples two
-living agents without replacement; their sampled order assigns first/second
-roles. The protocol owns its seeded random generator, independent of global
-random draws. First sends one message, second observes it and replies, then
-first and second choose GIVE or NOTHING in that order. Both see the other's
+Provide one policy per agent in state order. By default, each step with at least
+two survivors uniformly samples one living pair without replacement. Encounter density
+selects disjoint pairs, including zero pairs with multiple survivors; sampled
+order assigns first/second roles within each pair. The protocol owns its seeded
+random generator, independent of global random draws. Within each pair, first
+sends one message, second observes it and replies, then first and second choose
+GIVE or NOTHING in that order. Both see the other's
 message when acting; second also sees first's chosen action. GIVE automatically
 targets the encounter partner. Gifts resolve simultaneously through the shared
 world, followed by one Life decay for every living agent, including those not
-selected. Fewer than two survivors means no communication or action callbacks;
+selected. Zero selected pairs means no communication or action callbacks;
 time still advances.
 
 Policy observations contain own Life/Points, partner Life/Points, a copy of the
@@ -173,6 +265,26 @@ Messages are sequences of integer tokens in `range(vocabulary_size)`, at most
 disables token transmission. Tokens carry no predefined meaning, reward, or
 direct world effect. Invalid messages or actions raise `ValueError` before
 world state changes (policy callbacks and random sampling are not rolled back).
+
+Encounter density is configurable in both sequential and batched execution with
+`--encounter-count` (TOML: `encounter_count`) or `--encounter-fraction`
+(TOML: `encounter_fraction`). Count must be a nonnegative integer; fraction must
+be finite and in `[0, 1]`. Supplying both is an error, including across TOML and
+CLI; an override of the same setting replaces its configured value. If neither
+is supplied, count defaults to 1. For the current living population `L`, the
+number of disjoint pairs is `min(count, L // 2)` or
+`floor(fraction * L / 2)`. Zero pairs still advance survival time; an episode
+with no decisions records zero loss and skips the optimizer update.
+
+For 32-agent comparisons, keep all other settings fixed and run with
+`--num-agents 32 --encounter-count 1`, then counts `4`, `8`, and `16`.
+These options combine with existing `--capacity-preset small|medium|large`
+and leave Actor-Critic coefficients unchanged. Resolved density settings are
+saved in the existing configuration records and summaries. The
+[32-agent RTX 5090 density benchmark](docs/rtx5090-density.md) records throughput,
+utilization, VRAM and stability with fixed capacity and learning/resource settings.
+Sequential traces include explicit `pairs` for relationship analysis; batched trace participants
+are consecutive first/second pairs, padded with `-1` for unused slots.
 
 Run the checks from the repository root:
 
@@ -386,9 +498,10 @@ GIVE, cooperation, or internal-state rewards. Memory, thought, and affect learn
 through recurrent gradients from the same objective. A disabled channel has no
 message loss but retains its internal-state update.
 
-Incomplete episodes, truncated segments, and episodes without sampled decisions
-are rejected by the loss. This minimal update uses full episode graphs and has
-no truncation bootstrap. CPU tests verify finite losses,
+Incomplete episodes and truncated segments are rejected by the loss. Complete
+zero-pair episodes return zero loss and skip backward and optimizer updates.
+This minimal update uses full episode graphs and has no truncation bootstrap.
+CPU tests verify finite losses,
 per-agent credit, nonzero gradients and parameter updates, including memory and
 affect feedback; they do not establish learned cooperation or communication.
 
@@ -690,6 +803,28 @@ samples only within one training seed, policy, and intervention:
   mean length is null with no callbacks. Empty messages are counted, including a
   disabled channel. Fixed-length learned messages may show usage without utility.
 
+Evaluation episodes and `examples/analyze_run.py` also report `encounter_exposure`.
+Its `per_agent` rows include every starting agent, including agents with zero
+encounters: `encounters` counts action callbacks, `repeat_encounters` counts
+meetings after the first with each actual partner, and `unique_partners` counts
+partners met. Communication callbacks do not add encounters. Counts cover the
+observed episode, including finite-horizon episodes, without extrapolation.
+
+`encounter_count_distribution` and `repeat_count_distribution` map a count to its
+number of agent-episode samples; their denominator is `agent_episodes`.
+`same_partner_count_distribution` maps meetings with one partner to the number
+of directed agent-partner episode samples. Its denominator,
+`directed_partner_episodes`, includes every possible other partner, with unseen
+partners in bin zero (no self pairs). `repeat_fraction` divides
+`repeat_encounter_callbacks` by `encounter_callbacks`, and is null without
+encounters. Evaluation summaries pool these distributions within the existing
+training-seed/policy/intervention groups, preserving episode boundaries.
+When any pooled episode lacks exposure data (as in retained older reports),
+the summary omits `encounter_exposure` and retains the legacy metrics.
+Actual identities remain analysis-only, including under Appearance collisions
+and interventions. Existing strictly prior aid histories, first/repeat producer
+bins, GIVE/collapse and Communication metrics retain their own denominators.
+
 `intervention_effects` reports intervention-minus-untreated differences in observed
 lifetime, censoring count, and GIVE fraction for each matched training/evaluation
 seed pair and learned condition. The detailed rows and summaries support history and Communication
@@ -847,6 +982,15 @@ Deterministic reference checks can be run with:
 python -m unittest discover -s tests -p 'test_batched*.py' -v
 ```
 
+Disjoint encounter pairs share four policy calls per world step: first messages,
+replies, first actions, then second actions. One completion call follows simultaneous
+world resolution, including participants that died or reached the horizon on that
+step. Decisions are routed by `[world, observer]` with active masks; the pair list
+retains consecutive first/second entries and `-1` padding. Each pair retains its
+own random draws from its world's stream, and each observer retains private
+recurrent and Entity Memory state. Pair selection consumes the existing per-pair
+random blocks; batching phases changes neither network capacity nor learning rules.
+
 The small-configuration reference coverage is split by responsibility:
 
 | Tests | Reference comparisons |
@@ -856,6 +1000,14 @@ The small-configuration reference coverage is split by responsibility:
 | `test_batched_policy.py`, `test_batched_entity_memory.py` | Scalar policy and Appearance memory lookup/write results, repeated/colliding keys, inactive observers, disabled memory, reset/detach, and private recurrent/Entity Memory gradients. |
 | `test_batched_rollout.py` | Scalar loss reduction for both training methods, reward accounting for unselected/lone survivors, continuation, and gradients. |
 | `test_batched_training.py` | Independent scalar complete episodes, loss components, parameter gradients, and Adam updates. Covers extinction and finite horizons, empty/three-token channels, repeated updates, and renewable resources with successful/unaffordable GIVE and NOTHING. |
+| `test_density_training_parity.py` | Independently scripted multi-pair episodes at fixed and fractional density: resources, routing, Communication, completion memory, scalar/batched traces, encounter counters, episode-normalized Actor-Critic losses, gradients and Adam updates across death and horizon boundaries. |
+
+Batched traces include explicit `pairs` of first/second participants, excluding
+unused slots, alongside the existing flat, `-1`-padded `participants` list.
+Encounter counters count pairs of action decisions, including NOTHING; messages,
+padding, finished worlds and steps without encounters do not add encounters.
+Increasing density adds decision terms to the complete-episode objective without
+renormalizing by encounters: losses still average over starting agents and worlds.
 
 Policy initialization uses fixed seeds in the numerical comparisons. World tests
 replay controlled generation uniforms for scalar survivors because the scalar
@@ -899,13 +1051,16 @@ result = protocol.step(state)
 state = result.state
 ```
 
-Each unfinished world with at least two survivors selects one uniform ordered
-living pair. Four batched phases preserve message, reply, first action and second
-action order. Only the second action sees the first action; completion reveals
+By default, each unfinished world with at least two survivors selects one uniform
+ordered living pair. Configurable encounter density selects disjoint pairs,
+including zero pairs with multiple survivors. Four batched phases preserve
+message, reply, first action and second action order. Only the second action sees
+the first action; completion reveals
 both final actions and successful transfers to the participants. Completion uses
 pre-step resources, messages and observed Appearance, including for participants
-who die at resolution. Unselected agents retain their state. Lone survivors
-advance time without policy decisions; completed worlds remain frozen.
+who die at resolution. Unselected agents retain their state. Worlds with zero
+selected pairs advance time without policy decisions; completed worlds remain
+frozen.
 
 `result.pairs` contains routing indices (`-1` for no encounter), never policy
 features. `result.decisions` holds the four phase observations, active masks,

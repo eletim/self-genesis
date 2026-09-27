@@ -11,31 +11,31 @@ from self_genesis.world import Action
 
 
 class BatchedRolloutTests(unittest.TestCase):
-    def collector(self, device='cpu', length=3, **kwargs):
+    def collector(self, device='cpu', length=3, num_agents=3, **kwargs):
         torch.manual_seed(7)
-        config = ExperimentConfig(num_agents=3, appearance_dim=3, initial_life=4,
+        config = ExperimentConfig(num_agents=num_agents, appearance_dim=3, initial_life=4,
                                   initial_points=0, device=device, **kwargs)
         return BatchedRolloutCollector(
             config, RecurrentPolicy(3, max_message_length=length).to(device), seeds=[11, 22])
 
     def test_complete_objective_and_gradient_parity_with_scalar_loss(self):
         for device in (['cpu', 'cuda'] if torch.cuda.is_available() else ['cpu']):
-            for length in (0, 3):
+            for length, count in ((0, 1), (3, 1), (0, 2), (3, 2)):
                 for method in ('reinforce', 'actor_critic'):
-                    with self.subTest(device=device, length=length, method=method):
-                        collector = self.collector(device, length)
+                    with self.subTest(device=device, length=length, count=count, method=method):
+                        collector = self.collector(device, length, num_agents=5, encounter_count=count)
                         collector.world.state.life[:] = torch.tensor(
-                            [[1, 2, 4], [3, 3, 3]], device=device)
+                            [[1, 2, 4, 2, 1], [3, 3, 3, 3, 3]], device=device)
                         rollout = collector.collect(20)
                         self.assertEqual(rollout.end_steps.tolist(), [4, 3])
                         rewards = torch.stack([e.reward for e in rollout.experiences])
-                        self.assertEqual(rewards.sum(0).tolist(), [[1, 2, 4], [3, 3, 3]])
+                        self.assertEqual(rewards.sum(0).tolist(), [[1, 2, 4, 2, 1], [3, 3, 3, 3, 3]])
                         self.assertEqual(rollout.experiences[-1].decisions, ())
                         reference = []
                         for row in range(2):
-                            agents = [[] for _ in range(3)]
+                            agents = [[] for _ in range(5)]
                             for step, experience in enumerate(rollout.experiences):
-                                for agent in range(3):
+                                for agent in range(5):
                                     if not experience.reward[row, agent]:
                                         continue
                                     decisions = []
@@ -69,7 +69,7 @@ class BatchedRolloutTests(unittest.TestCase):
                                 torch.testing.assert_close(g, e, atol=2e-6, rtol=2e-5)
 
     def test_budget_continuation_retains_full_recurrent_graph(self):
-        collector = self.collector(survival_horizon=3)
+        collector = self.collector(survival_horizon=3, num_agents=5, encounter_count=2)
         first = collector.collect(1)
         state = collector.state
         for tensor in (state.memory, state.affect, state.entities.values):
@@ -95,8 +95,8 @@ class BatchedRolloutTests(unittest.TestCase):
         self.assertIsNone(collector.state.memory.grad_fn)
 
     def test_split_collection_matches_uninterrupted_worlds(self):
-        collector = self.collector(survival_horizon=3)
-        reference = self.collector(survival_horizon=3)
+        collector = self.collector(survival_horizon=3, num_agents=5, encounter_count=2)
+        reference = self.collector(survival_horizon=3, num_agents=5, encounter_count=2)
         complete = reference.collect(10)
         split = collector.collect(1).extend(collector.collect(1)).extend(collector.collect(10))
         for actual, expected in zip(split.experiences, complete.experiences):

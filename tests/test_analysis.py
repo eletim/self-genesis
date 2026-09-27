@@ -195,3 +195,93 @@ class AnalysisTests(unittest.TestCase):
         rows = self.analyze_episodes([events])[0]['relationship_actions']
         self.assertEqual(rows[2]['prior']['encounters'], 0)
         self.assertEqual(rows[2]['prior']['outgoing_aid'], 0)
+
+    def test_exposure_counts_use_actual_partners_and_include_idle_agents(self):
+        from self_genesis.analysis import RelationshipAnalysis, encounter_exposure_metrics
+        analysis = RelationshipAnalysis(dict(appearance=[[0.1]] * 5))
+        for number, pairs in enumerate(([[0, 1], [2, 3]], [[1, 0], [2, 3]], [[0, 2]])):
+            callbacks = [dict(agent=agent, phase='action', choice='NOTHING',
+                              observation=dict(partner_appearance=[number]))
+                         for pair in pairs for agent in pair]
+            analysis.record_step(dict(step=number, pairs=pairs, participants=[],
+                                      callbacks=callbacks, successful_transfers=[],
+                                      generated_points=[0] * 5))
+        exposure = analysis.encounter_exposure()
+        agents = exposure['per_agent']
+        self.assertEqual([a['encounters'] for a in agents], [3, 2, 3, 2, 0])
+        self.assertEqual([a['repeat_encounters'] for a in agents], [1, 1, 1, 1, 0])
+        self.assertEqual([a['unique_partners'] for a in agents], [2, 1, 2, 1, 0])
+        self.assertEqual(exposure['encounter_count_distribution'], {0: 1, 2: 2, 3: 2})
+        self.assertEqual(exposure['repeat_count_distribution'], {0: 1, 1: 4})
+        self.assertEqual(exposure['same_partner_count_distribution'], {0: 14, 1: 2, 2: 4})
+        self.assertEqual(exposure['directed_partner_episodes'], 20)
+        self.assertEqual(exposure['repeat_fraction'], 4 / 10)
+        self.assertEqual([r['prior']['encounters'] for r in analysis.rows],
+                         [0, 0, 0, 0, 1, 1, 1, 1, 0, 0])
+        empty = RelationshipAnalysis(dict(appearance=[[0.1]] * 5)).encounter_exposure()
+        self.assertIsNone(empty['repeat_fraction'])
+        self.assertEqual(empty['encounter_count_distribution'], {0: 5})
+        # A JSON roundtrip turns histogram keys into strings. Pool episodes,
+        # never combine repeated numeric agent identities into longer histories.
+        pooled = encounter_exposure_metrics(json.loads(json.dumps(agents + empty['per_agent'])))
+        self.assertEqual(pooled['agent_episodes'], 10)
+        self.assertEqual(pooled['directed_partner_episodes'], 40)
+        self.assertEqual(pooled['same_partner_count_distribution'], {0: 34, 1: 2, 2: 4})
+        self.assertEqual(pooled['repeat_encounter_callbacks'], 4)
+
+    def test_analyzer_exposure_resets_between_episodes(self):
+        reports = self.analyze_episodes([
+            episode([step(0, [0, 1], ['GIVE', 'NOTHING']),
+                     step(1, [1, 0], ['NOTHING', 'GIVE'])]),
+            episode([step(0, [], [])]),
+        ])
+        self.assertEqual(reports[0]['encounter_exposure']['repeat_encounter_callbacks'], 2)
+        self.assertEqual(reports[1]['encounter_exposure']['encounter_count_distribution'], {0: 3})
+
+    def test_evaluation_exposure_and_pooled_denominators(self):
+        from self_genesis.analysis import evaluation_summary
+        from self_genesis.comparison import evaluate_policy
+        from self_genesis.config import ExperimentConfig
+        from self_genesis.world import Action
+        evaluations = [evaluate_policy(ExperimentConfig(
+            num_agents=4, initial_life=10, survival_horizon=3,
+            encounter_count=count, seed=7), Action.NOTHING) for count in (0, 2)]
+        empty, dense = [e['encounter_exposure'] for e in evaluations]
+        self.assertEqual(empty['encounter_count_distribution'], {0: 4})
+        self.assertEqual(dense['encounter_count_distribution'], {3: 4})
+        self.assertEqual(dense['encounter_callbacks'], 12)
+        self.assertEqual(dense['repeat_encounter_callbacks'], sum(
+            row['prior']['encounters'] > 0 for row in evaluations[1]['relationship_actions']))
+        summary = evaluation_summary(evaluations, 4)
+        pooled = summary['encounter_exposure']
+        self.assertEqual(pooled['agent_episodes'], 8)
+        self.assertEqual(pooled['directed_partner_episodes'], 24)
+        self.assertEqual(pooled['encounter_count_distribution'], {0: 4, 3: 4})
+        self.assertEqual(pooled['encounter_callbacks'], summary['action_callbacks'])
+        self.assertEqual(summary['successful_aid_known_samples'], 12)
+        self.assertEqual(summary['give_collapse'], 'near_always_NOTHING')
+        self.assertEqual(summary['communication']['callbacks'], 12)
+        producer_bins = summary['partner_history_metrics']['partner_producers']
+        self.assertEqual(sum(b['action_callbacks'] for group in producer_bins.values()
+                             for b in group['bins'].values()), 12)
+
+    def test_legacy_and_mixed_evaluations_preserve_summary_metrics(self):
+        from self_genesis.analysis import evaluation_summary
+        from self_genesis.comparison import evaluate_policy
+        from self_genesis.config import ExperimentConfig
+        from self_genesis.world import Action
+        current = evaluate_policy(ExperimentConfig(num_agents=2, initial_life=2), Action.NOTHING)
+        legacy = {key: value for key, value in current.items() if key != 'encounter_exposure'}
+        expected = evaluation_summary([current, current], 4)
+        del expected['encounter_exposure']
+        for evaluations in ([legacy, legacy], [legacy, current], [current, legacy]):
+            with self.subTest(legacy_first='encounter_exposure' not in evaluations[0]):
+                self.assertEqual(evaluation_summary(evaluations, 4), expected)
+
+    def test_retained_entity_memory_report_verifier(self):
+        from examples.verify_entity_memory_experiment import read_report, verify
+        evidence = Path(__file__).resolve().parents[1] / 'docs' / 'evidence'
+        old = read_report(evidence / 'matched-learning' / 'actor_critic.json.gz')
+        new = read_report(evidence / 'entity-memory' / 'v006.json.gz')
+        result = verify(old, new)
+        self.assertEqual(result['summaries'], new['summaries'])

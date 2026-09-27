@@ -711,7 +711,7 @@ independently of batch ordering or other worlds' deaths and resets.
 Appearance-keyed memory storage primitive. Keys have shape
 `[world, observer, slot, appearance]`, values `[world, observer, slot, value]`,
 and occupancy `[world, observer, slot]`. It is used by the batched policy API
-below and the batched encounter executor; training collection is not yet connected.
+below, the batched encounter executor, and the tensor trajectory collector.
 
 Create it with `BatchedEntityMemory.empty(worlds, observers, slots, appearance_dim,
 value_dim, device=..., dtype=...)`, reserving enough slots for each observer's
@@ -861,3 +861,39 @@ not the legacy Python encounter RNG sequence. Reset world resources with
 `world.reset(row, seed=...)` and recurrent/entity state with `state.reset(mask)`;
 encounter streams continue across resets. Detach state only at an optimizer
 boundary. This executor does not change the existing sequential training CLI.
+
+
+### Batched survival trajectories
+
+`BatchedRolloutCollector` owns the tensor world, encounter executor, and independent
+recurrent state for each world and agent. Collection budgets return segments;
+join consecutive segments to retain the entire survival objective and graph:
+
+```python
+from self_genesis.batched_rollout import BatchedRolloutCollector
+from self_genesis.training import survival_policy_loss
+
+collector = BatchedRolloutCollector(config, network, seeds=[11, 22])
+rollout = collector.collect(32)
+while bool(rollout.truncated.any()):
+    rollout = rollout.extend(collector.collect(32))
+optimizer.zero_grad(set_to_none=True)
+survival_policy_loss(rollout).backward()
+collector.detach()
+optimizer.step()
+```
+
+Use a finite `survival_horizon` for renewable worlds. Finished rows freeze while
+other worlds continue. Rewards include unselected agents and lone survivors;
+horizon completion is distinct from death. The existing survival loss functions
+accept tensor rollouts and average the per-world objectives, each normalized by
+its starting agent count. They reject incomplete budgets and segments missing
+step zero. Joining requires contiguous segments from the same collector and
+episodes. Empty channels have no message loss but still advance recurrence.
+
+After consuming the objective, `reset(world, seed=...)` clears one world's
+resources and recurrent state while preserving other rows and their graphs.
+Encounter sampling streams persist through reset. No collection call implicitly
+detaches state or updates weights, and `detach()` rejects unfinished objectives.
+Reset every row before collecting the next full batch for a shared-weight update.
+This API does not change the existing scalar training command.

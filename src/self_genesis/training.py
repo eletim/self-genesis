@@ -5,6 +5,7 @@ from pathlib import Path
 
 import torch
 
+from self_genesis.batched_rollout import BatchedRollout
 from self_genesis.config import ExperimentConfig
 from self_genesis.experiment import resolve_device
 from self_genesis.observation import RunRecorder
@@ -23,7 +24,7 @@ class SurvivalLoss:
 
 
 def survival_loss_components(
-        rollout: Rollout, *, training_method: str = "actor_critic",
+        rollout: Rollout | BatchedRollout, *, training_method: str = "actor_critic",
         value_loss_coefficient: float = 0.5,
         action_entropy_coefficient: float = 0.01,
         message_entropy_coefficient: float = 0.01) -> SurvivalLoss:
@@ -40,6 +41,10 @@ def survival_loss_components(
     """
     if training_method not in ("actor_critic", "reinforce"):
         raise ValueError("training_method must be actor_critic or reinforce")
+    if isinstance(rollout, BatchedRollout):
+        return _batched_survival_loss(
+            rollout, training_method, value_loss_coefficient,
+            action_entropy_coefficient, message_entropy_coefficient)
     if (not (rollout.terminated or rollout.horizon_completed) or rollout.truncated
             or any(items and items[0].step != 0 for items in rollout.experiences)):
         raise ValueError("Survival loss requires a complete episode from step zero")
@@ -79,8 +84,47 @@ def survival_loss_components(
     return SurvivalLoss(loss, actor_loss, value_loss, action_entropy, message_entropy)
 
 
+def _batched_survival_loss(rollout, method, value_coefficient,
+                          action_coefficient, message_coefficient):
+    """Average complete world objectives, each normalized by starting agents."""
+    if bool(rollout.truncated.any()) or bool((rollout.start_steps != 0).any()):
+        raise ValueError("Survival loss requires complete episodes from step zero")
+    if not rollout.experiences:
+        raise ValueError("Episode has no sampled policy decisions")
+    returns = torch.zeros_like(rollout.experiences[0].reward, dtype=torch.float32)
+    actor_terms, value_terms, action_terms, message_terms = [], [], [], []
+    for experience in reversed(rollout.experiences):
+        returns = returns + experience.reward.float()
+        for decision in experience.decisions:
+            if decision.log_prob is None or not bool(decision.active.any()):
+                continue
+            log_prob = decision.log_prob[decision.active].float()
+            target = returns[decision.active]
+            if method == "reinforce":
+                actor_terms.append((-log_prob * target).sum())
+                continue
+            if decision.value is None or decision.entropy is None:
+                raise ValueError("Sampled decisions require value and entropy")
+            advantage = target - decision.value[decision.active].float()
+            actor_terms.append((-log_prob * advantage.detach()).sum())
+            value_terms.append(advantage.square().sum())
+            terms = message_terms if decision.communicating else action_terms
+            terms.append(decision.entropy[decision.active].float().sum())
+    if not actor_terms:
+        raise ValueError("Episode has no sampled policy decisions")
+    actor = torch.stack(actor_terms).sum() / returns.numel()
+
+    def average(terms):
+        return torch.stack(terms).sum() / returns.numel() if terms else actor.new_zeros(())
+
+    value, action, message = map(average, (value_terms, action_terms, message_terms))
+    loss = (actor + value_coefficient * value - action_coefficient * action
+            - message_coefficient * message if method == "actor_critic" else actor)
+    return SurvivalLoss(loss, actor, value, action, message)
+
+
 def survival_policy_loss(
-        rollout: Rollout, *, training_method: str = "actor_critic",
+        rollout: Rollout | BatchedRollout, *, training_method: str = "actor_critic",
         value_loss_coefficient: float = 0.5,
         action_entropy_coefficient: float = 0.01,
         message_entropy_coefficient: float = 0.01) -> torch.Tensor:

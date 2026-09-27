@@ -1,4 +1,4 @@
-# Capacity, encounter density, throughput, and behavior workflow
+# Capacity, encounter density, Thought, throughput, and behavior workflow
 
 v0.0.7 validates scalable execution of the existing survival experiment. It does
 not establish that larger policies learn cooperation, reciprocity, useful
@@ -20,6 +20,15 @@ Actor-Critic coefficients, survival-only reward, renewable world, recurrent stat
 structures and communication fixed. Hidden traits and identity labels remain
 analysis/oracle-only; no social reward or supervised target is added.
 
+v0.0.9 delivers recurrent Thought in sequential and batched execution. The
+[design contract](design-principles.md) and
+[representative scenarios](representative-scenarios.md) describe callback-local
+zero initialization, fixed observation/memory context, shared Linear → ReLU
+iterations and frozen world time. Working Memory and affect update once after
+the loop; Entity Memory retains callback/completion writes. Persistent states
+remain private and reset at episode boundaries. Complete-episode gradients
+cross all internal steps; thinking adds no decisions, rewards or world steps.
+
 ## Record conditions and verify capacity
 
 Use the [environment setup](minimal-experiment.md), run from the repository root,
@@ -39,13 +48,15 @@ for preset in ('small', 'medium', 'large'):
 PY
 ```
 
-| Preset | Working Memory / thought | Affect | Entity Memory | Shared parameters |
-| --- | ---: | ---: | ---: | ---: |
-| small | 16 | 4 | 16 | 10,987 |
-| medium | 128 | 32 | 64 | 278,823 |
-| large | 512 | 128 | 256 | 4,211,847 |
+| Preset | Working Memory / thought | Affect | Entity Memory | Recurrent parameters | Shallow parameters |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| small | 16 | 4 | 16 | 11,243 | 10,987 |
+| medium | 128 | 32 | 64 | 295,207 | 278,823 |
+| large | 512 | 128 | 256 | 4,473,991 | 4,211,847 |
 
-These counts use Appearance dimension 8, vocabulary 4 and message length 3,
+The script prints current recurrent counts; pass `thought_mode="shallow"` to
+`from_preset` for historical shallow counts. Increasing recurrent depth adds no
+parameters. These counts use Appearance dimension 8, vocabulary 4 and message length 3,
 including the critic and both Entity Memory update cells. Private per-world,
 per-agent recurrent state is not a parameter. Changing dimensions or disabling
 Entity Memory changes the count; use the actual recorded `parameter_count`.
@@ -54,11 +65,108 @@ Explicit dimensions override presets: avoid `configs/default.toml` for capacity
 sweeps because its explicit small dimensions override the preset. The commands
 below specify the renewable environment without that file.
 
+## Reproduce the Thought experiments
+
+After setup above, use an activated Python/PyTorch environment and fresh output
+paths. TOML keys `thought_mode = "recurrent"` and `think_steps = 16` are the
+current defaults. CLI `--thought-mode` and `--think-steps` override them for
+initialization, training and comparison, independently of capacity presets.
+Integer counts of at least 16 are valid (including 32/64); booleans, fractions
+and smaller counts are rejected. Shallow mode uses one Linear → tanh transform
+and ignores the validated count. Neither mode changes the world rules.
+
+A portable CPU smoke comparison exercises shallow/16/32 and all four memory and
+Appearance interventions with frozen sequential evaluation of trained weights:
+
+```sh
+PYTHONPATH=src python -m self_genesis compare --compare-thought --batched \
+  --deterministic --device cpu --num-worlds 2 --episodes 2 \
+  --num-agents 4 --encounter-fraction 1.0 --survival-horizon 8 \
+  --point-generation-probability-max 0.5 \
+  --training-seeds 7 17 --evaluation-seeds 101 102 \
+  --output /tmp/thought-smoke.json
+```
+
+The matrix overrides individual mode/depth flags and retains Entity Memory in
+all three architectures. This tiny budget checks execution, not learning.
+Training seeds must be disjoint from evaluation seeds across the full schedule
+`training_seed + update * num_worlds + row`. Reports contain configs, parameter
+counts, world seeds, updates, held-out summaries, matched intervention effects
+and sampled Thought diagnostics; training JSONL is not a checkpoint.
+
+Verify the retained [three-seed evidence](controlled-thought-comparison.md) on
+CPU without retraining:
+
+```sh
+PYTHONPATH=src python examples/verify_thought_comparison.py \
+  > /tmp/thought-retained-summary.json
+```
+
+Reproduce the predeclared [configuration](../configs/controlled-thought.toml)
+in a CUDA-capable environment, then verify the new reports:
+
+```sh
+PYTHONPATH=src CUBLAS_WORKSPACE_CONFIG=:4096:8 python \
+  examples/run_thought_comparison.py --output /tmp/controlled-thought-replay
+PYTHONPATH=src python examples/verify_thought_comparison.py \
+  /tmp/controlled-thought-replay > /tmp/thought-replay-summary.json
+```
+
+The runner fixes deterministic FP32, one CPU thread, small capacity, 32 agents,
+16 pairs, horizon 32, 50 updates of 128 worlds per mode and training seeds
+10000/20000/30000. Evaluation seeds are 100000/100001/100002. This is nine training
+runs, 450 updates and 57,600 episodes, with a 1,200-second worker cap per training
+seed (all three modes plus evaluation). Preserve manifests, failed cases, hashes
+and compressed reports. The verifier checks budgets, seeds, finite diagnostics,
+evaluation worlds, recomputed summaries/deltas and sampled internal steps; it
+does not promise exact replay across software or devices.
+
+Both recurrent depths yielded seed-level mean lifetimes
+15.4688 / 15.4375 / 14.1146 versus shallow's 14.2292 / 14.9167 / 15.2500.
+All stayed below always-GIVE (15.8021); 32 steps improved no measured survival,
+aid or selection metric over 16. Entity Memory reset had zero recurrent lifetime
+effect, while Appearance/Working Memory effects were small and mixed. Keep null
+bins, censoring and denominators, and report each seed before pooling. Three
+training seeds and three evaluation worlds are descriptive evidence; equal
+episodes do not match compute or actual encounters. Shallow differs in activation,
+initialization and parameter count, and no untrained control isolates learning.
+Mixed actions and positive history associations do not prove cooperation or
+useful memory; token usage does not prove causal communication utility.
+
+Read [preselected stepwise dynamics](controlled-thought-dynamics.md) alongside
+`thought_samples`. Probes replay fixed context without changing state or RNG;
+intermediate logit/value readouts are hypothetical. The relative-change threshold
+0.001 is diagnostic, never early stopping. Recurrent-32 representative probes
+first met it at steps 19/13/14; this is neither universal convergence nor evidence
+of useful deliberation. Normal training does not retain internal-step traces.
+
+Measure full-episode GPU cost separately on an RTX 5090:
+
+```sh
+PYTHONPATH=src python examples/benchmark_rtx5090.py --sweep recurrent \
+  --capacity small --precision fp32 --world-counts 64 128 256 \
+  --num-agents 32 --encounter-count 16 --updates 20 --warmup 1 --horizon 16 \
+  --seed 42 --timeout 600 --output /tmp/thought-throughput
+```
+
+The sweep runs 16/32 steps; `--include-64` adds an unmeasured optional depth.
+[All six retained cases](rtx5090-recurrent-thought.md) had finite full-episode
+losses/gradients/parameters. At 256 worlds, 16/32 measured 6,653.9 / 5,734.0 world
+steps/s and 3.442 / 4.872 GiB peak allocated memory. This was the fastest tested
+batch at both depths, not an optimum. One seed, short horizon, nondeterministic
+kernels and desktop telemetry limit generalization. The benchmark's full CUDA
+suite also retained two pre-existing BF16 gradient-tolerance failures reproduced
+on its base revision; FP32 Thought checks passed. No BF16 fix or long-run
+stability claim follows from these measurements. Worker time in the behavioral
+comparison includes evaluation/compression and is not GPU training throughput.
+
 ## Compare execution throughput
 
-Reproduce all 33 sequential/batched, capacity, FP32/BF16 cases using the existing
+Run the 33-case sequential/batched, capacity, FP32/BF16 matrix using the existing
 runner, which records warmup separately, failures/timeouts, update measurements,
-telemetry and commands:
+telemetry and commands. On this branch it uses recurrent Thought (16 steps by
+default); the table below is historical shallow v0.0.7 evidence, not the expected
+output of this current command:
 
 ```sh
 python examples/benchmark_rtx5090.py --output /tmp/scaled-throughput \
@@ -112,15 +220,23 @@ histories and cannot be passed to `examples/analyze_run.py`.
 
 After environment setup above, use a CUDA-capable PyTorch interpreter and fresh
 output directories. The retained run used Python 3.12.14, PyTorch 2.7.1+cu128 and
-CUDA 12.8 on an RTX 5090. Verify existing evidence on CPU without retraining:
+CUDA 12.8 on an RTX 5090. This section documents historical shallow evidence;
+run its verifier and reproduction commands from evidence commit `9bb64ec`,
+which adds the verifier to the implementation recorded in the
+[retained manifest](evidence/controlled-density/manifest.json). Its verifier
+compares reports against historical configuration defaults, which differ from
+this branch. Verify existing evidence on CPU without retraining:
 
 ```sh
 PYTHONPATH=src:. python examples/verify_density_comparison.py \
   > /tmp/density-retained-summary.json
 ```
 
-Reproduce the fixed [configuration](../configs/controlled-density.toml) and verify
-the new reports with the same verifier:
+The commands below are the historical v0.0.8 reproduction procedure.
+On this branch the density runner inherits recurrent Thought defaults, so it
+does not reproduce the shallow evidence or its parameter counts. For the
+current matched architecture experiment use the Thought procedure above.
+The historical procedure uses the fixed [configuration](../configs/controlled-density.toml):
 
 ```sh
 PYTHONPATH=src CUBLAS_WORKSPACE_CONFIG=:4096:8 python \
@@ -146,7 +262,8 @@ reports and hashes; the verifier checks settings, seeds, exposure counts,
 recomputed summaries and matched intervention deltas. It validates report
 consistency, not exact cross-version numerical replay.
 
-For operating measurements, rerun the separate shorter-horizon benchmark:
+For current operating measurements, run the separate shorter-horizon matrix.
+It now uses recurrent Thought; the retained measurements below used shallow:
 
 ```sh
 python examples/benchmark_rtx5090.py --sweep density \

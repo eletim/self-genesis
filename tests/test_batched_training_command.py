@@ -58,6 +58,8 @@ class BatchedTrainingCommandTests(unittest.TestCase):
                 self.assertEqual(rows[2]['seeds'], [45, 46, 47])
                 self.assertEqual(len(rows[1]['survival_returns']), 3)
                 self.assertNotEqual(rows[1]['loss'], rows[2]['loss'])
+                for row in rows:
+                    row.pop("measurement", None)
                 records.append(rows)
             self.assertEqual(*records)
             original = (path / 'a.jsonl').read_bytes()

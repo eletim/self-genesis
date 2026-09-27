@@ -61,7 +61,7 @@ python -m pip install 'torch==2.7.1' --index-url https://download.pytorch.org/wh
 python -m pip install 'numpy==2.2.6' -e .
 python -m pip check
 mkdir -p /tmp/self-genesis-runs
-python -m self_genesis train --config configs/default.toml \
+python -m self_genesis train --trace-worlds 0 --config configs/default.toml \
   --device cpu --seed 42 --episodes 2 --initial-life 3 --initial-points 1 \
   --survival-horizon 12 --training-method actor_critic \
   --output /tmp/self-genesis-runs/cpu.jsonl
@@ -104,7 +104,7 @@ torch.cuda.synchronize()
 print('CUDA forward/backward:', x.grad.tolist())
 PY
 mkdir -p /tmp/self-genesis-runs
-python -m self_genesis train --config configs/default.toml \
+python -m self_genesis train --trace-worlds 0 --config configs/default.toml \
   --device cuda --seed 42 --episodes 2 --initial-life 3 --initial-points 1 \
   --survival-horizon 12 --training-method actor_critic \
   --output /tmp/self-genesis-runs/rtx5090.jsonl

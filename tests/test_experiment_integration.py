@@ -20,7 +20,7 @@ class ExperimentIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'run.jsonl'
             completed = subprocess.run([
-                sys.executable, '-m', 'self_genesis', 'train',
+                sys.executable, '-m', 'self_genesis', 'train', '--trace-worlds', '0',
                 '--config', str(ROOT / 'configs/default.toml'),
                 '--seed', '42', '--device', device, '--episodes', '2',
                 '--initial-life', '3', '--initial-points', '1',
@@ -38,7 +38,7 @@ class ExperimentIntegrationTests(unittest.TestCase):
             total_steps = 0
             for episode, row in enumerate(rows):
                 with self.subTest(device=device, episode=episode):
-                    events = [r for r in records if r['episode'] == episode]
+                    events = [r for r in records if r['episode'] == episode and r['type'] != 'measurement']
                     self.assertEqual(events[0]['type'], 'episode_start')
                     self.assertEqual([r['type'] for r in events[-2:]], ['summary', 'training'])
                     start, summary, update = events[0], events[-2], events[-1]
@@ -93,7 +93,7 @@ class ExperimentIntegrationTests(unittest.TestCase):
             self.assertEqual(run['total_steps'], total_steps)
             self.assertEqual(run['last_training']['loss'], rows[-1]['loss'])
             # A flushed but interrupted last episode must not look complete.
-            output.write_text('\n'.join(json.dumps(r) for r in records[:-1]) + '\n')
+            output.write_text('\n'.join(json.dumps(r) for r in records[:-2]) + '\n')
             failed = subprocess.run([
                 sys.executable, str(ROOT / 'examples/analyze_run.py'), str(output)
             ], capture_output=True, text=True)

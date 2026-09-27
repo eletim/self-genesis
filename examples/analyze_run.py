@@ -21,9 +21,14 @@ def analyze(path):
             if record['schema_version'] != 1:
                 raise ValueError('Unsupported observation schema')
             kind = record['type']
+            if kind == 'measurement':
+                continue
             if kind == 'episode_start':
                 if start is not None:
                     raise ValueError('Episode has no completed training update')
+                if not record.get("trace_complete", True):
+                    raise ValueError("Relationship analysis requires complete traces; use full evaluation "
+                                     "or trace world 0 with both intervals set to 1")
                 start = record
                 relationships = RelationshipAnalysis(start)
             elif start is None or record['episode'] != start['episode']:

@@ -47,8 +47,9 @@ class RunRecorder:
     cumulative within its episode; survivors are right-censored at that boundary.
     """
 
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, *, training: bool = False):
         self._file = Path(path).open("x", encoding="utf-8")
+        self.training = training
         self.episode = -1
         self._collector = None
 
@@ -66,6 +67,12 @@ class RunRecorder:
             {"schema_version": 1, "type": kind, "episode": self.episode, **values},
             allow_nan=False, default=_json_tensor) + "\n")
         self._file.flush()
+
+    def samples_step(self, collector):
+        config = collector.config
+        return (not self.training or (0 in config.trace_worlds
+                and self.episode % config.trace_update_interval == 0
+                and collector.elapsed_steps % config.trace_step_interval == 0))
 
     def start_episode(self, collector):
         if self._collector is not None and self._collector is not collector:
@@ -88,9 +95,25 @@ class RunRecorder:
             appearance=collector.world.state.appearance.tolist(),
             point_generation_probability=(
                 collector.world.state.point_generation_probability.tolist()),
-            states=[_state(agent.state) for agent in collector.agents])
+            states=([_state(agent.state) for agent in collector.agents]
+                    if self.samples_step(collector) else []),
+            trace_complete=(not self.training or (self.samples_step(collector)
+                            and collector.config.trace_step_interval == 1)))
 
     def record_step(self, collector, result, policies):
+        for policy in policies:
+            for decision in policy.decisions:
+                if isinstance(decision.choice, Action):
+                    self.actions[decision.choice.value] += 1
+                else:
+                    for token in decision.choice:
+                        self.tokens[token] += 1
+        for index, reward in enumerate(result.reward.tolist()):
+            self.lifetimes[index] += reward
+            if result.died[index]:
+                self.death_steps[index] = collector.elapsed_steps
+        if not self.samples_step(collector):
+            return
         callbacks = []
         participants = sorted(
             (index for index, policy in enumerate(policies) if policy.decisions),
@@ -109,11 +132,8 @@ class RunRecorder:
                 }
                 if isinstance(decision.choice, Action):
                     choice = decision.choice.value
-                    self.actions[choice] += 1
                 else:
                     choice = list(decision.choice)
-                    for token in choice:
-                        self.tokens[token] += 1
                 callbacks.append({
                     "agent": index, "phase": "message" if phase == 0 else "action",
                     "choice": choice, "observation": observation,
@@ -125,10 +145,6 @@ class RunRecorder:
                     "state_before": _state(decision.state_before),
                     "state_after": _state(decision.state_after),
                 })
-        for index, reward in enumerate(result.reward.tolist()):
-            self.lifetimes[index] += reward
-            if result.died[index]:
-                self.death_steps[index] = collector.elapsed_steps
         self._write(
             "step", step=collector.elapsed_steps, participants=participants,
             callbacks=callbacks,
@@ -172,3 +188,42 @@ class RunRecorder:
             optimizer=type(optimizer).__qualname__,
             optimizer_settings=[{key: value for key, value in group.items() if key != "params"}
                                 for group in optimizer.param_groups])
+
+
+class BatchedTraceRecorder:
+    """Serialize only selected worlds/steps; never retain tensor graphs."""
+
+    def __init__(self, config, write):
+        self.config = config
+        self.write = write
+        self.update = 0
+
+    def record_step(self, collector, result, step):
+        config = self.config
+        if (not config.trace_worlds or self.update % config.trace_update_interval
+                or step % config.trace_step_interval):
+            return
+        for world in config.trace_worlds:
+            # Done worlds freeze; do not duplicate their final snapshot.
+            if int(collector.world.steps[world]) != step + 1:
+                continue
+
+            def row(tensor):
+                return tensor[world].detach().cpu().tolist()
+
+            state = result.state
+            self.write(
+                "batch_trace", update=self.update, world=world, step=step,
+                participants=row(result.pairs),
+                decisions=[dict(communicating=d.communicating, active=row(d.active),
+                                choice=row(d.choice),
+                                observation={name: row(value) for name, value
+                                             in vars(d.observation).items()})
+                           for d in result.decisions],
+                rewards=row(result.world.reward), died=row(result.world.died),
+                generated_points=row(result.world.generated_points),
+                successful_transfers=row(result.world.successful_transfers),
+                life=row(collector.world.state.life), points=row(collector.world.state.points),
+                appearance=row(collector.world.state.appearance),
+                working_memory=row(state.memory), affect=row(state.affect),
+                entity_memory={name: row(value) for name, value in vars(state.entities).items()})

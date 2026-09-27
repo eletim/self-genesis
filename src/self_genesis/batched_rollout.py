@@ -65,6 +65,7 @@ class BatchedRolloutCollector:
                                                  slots=config.num_agents)
         self.episode_ids = torch.zeros_like(self.world.steps)
         self._source = object()
+        self.trace_recorder = None
 
     def reset(self, world: int, *, seed: int) -> None:
         """Reset one world and its recurrent state, retaining other rows' graphs."""
@@ -84,12 +85,15 @@ class BatchedRolloutCollector:
         if type(max_steps) is not int or max_steps < 1:
             raise ValueError("max_steps must be a positive integer")
         start = self.world.steps.clone()
+        trace_start = int(start.max()) if self.trace_recorder is not None else 0
         experiences = []
         for _ in range(max_steps):
             if bool(self.world.done.all()):
                 break
             result = self.protocol.step(self.state)
             self.state = result.state
+            if self.trace_recorder is not None:
+                self.trace_recorder.record_step(self, result, trace_start + len(experiences))
             experiences.append(BatchedExperience(
                 result.world.reward, result.world.died, result.decisions))
         return BatchedRollout(

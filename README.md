@@ -429,7 +429,8 @@ does not imply extinction or make `mean_survival_time` available.
 Agent and episode numbers are logging keys only and never enter policy inputs.
 Generation abilities, generation outcomes, and transfer events are analysis-only
 fields and are not added to policy observations.
-The `train` command also records these observations automatically.
+The `train` command records aggregate diagnostics automatically; use
+`--trace-worlds 0` to include full scalar observations.
 
 ## Configurable training command
 
@@ -467,7 +468,7 @@ determinism; CPU and CUDA training need not match.
 directory. Existing results are never overwritten. Stdout reports JSON with the
 absolute results path, effective settings, resolved device, completed episode
 count, total steps, and last update. The JSONL file contains all episode settings,
-observations, summaries, and learning metrics described above. Training attaches
+summaries and learning metrics described above, plus observations when tracing is enabled. Training attaches
 the recorder after collector construction, so only the requested episodes are
 recorded, numbered from zero, each with a summary and training result. Read it with
 `json.loads(line)` for each line. It is observation data, not a model checkpoint.
@@ -986,6 +987,46 @@ Batched JSONL contains one `batch_run` record with resolved settings, device,
 parameter count, RNG algorithm and initial encounter seeds, followed by one
 `batch_training` record per update. Each update records reset seeds, losses,
 steps and completion flags indexed by world, and survival returns indexed by
-world then agent. This compact format does not contain scalar encounter traces
+world then agent. By default this compact format does not contain detailed encounter traces
 and is not input for the scalar `examples/analyze_run.py` tool. The final CLI
 JSON reports update count, total world episodes and total world steps.
+
+### Training diagnostics and sampled traces
+
+Training defaults to aggregate records without detailed traces. Every update
+includes loss components and `metrics`: mean observed survival (including
+horizon-censored agents), GIVE choices divided by all action choices (not
+successful transfers), mean squared value error against undiscounted survival
+reward-to-go per sampled decision, mean action/message entropy in nats per
+sampled decision, and the global L2 gradient norm before the optimizer step.
+Message entropy is for the whole message. An empty message channel has a null
+mean entropy. REINFORCE still reports these diagnostics, although its value
+head is untrained and its unused loss components remain zero.
+
+Use `--trace-worlds 0 3 --trace-update-interval 10 --trace-step-interval 5`
+with batched training to record only worlds 0 and 3, updates 0, 10, 20, ...,
+and steps 0, 5, 10, .... TOML equivalents are `trace_worlds = [0, 3]`,
+`trace_update_interval = 10`, and `trace_step_interval = 5`. Defaults are an
+empty world list and intervals of 1; scalar training accepts only world 0.
+Sampled records contain detailed choices, observations, resources, latent
+states and Entity Memory. Batched snapshots show post-step state, with
+`occupied` marking valid Entity Memory slots. Completed worlds are not
+repeated. Sampling does not change policy inputs, rewards or aggregate metrics.
+
+Each update also records elapsed wall seconds, completed world steps per
+second, and CUDA peak allocated/reserved bytes (null on CPU). Measurement
+metadata names the device/GPU, PyTorch/CUDA versions, timing scope and allocator
+scope. CUDA synchronizes at measurement boundaries; CPU uses wall timing.
+Timing includes reset, rollout, backward, diagnostics, optimizer work and
+sampled trace I/O and result construction (including scalar training record I/O),
+but excludes construction and final measurement serialization.
+Allocator peaks include existing process allocations, not just this update's
+new tensors. GPU utilization is explicitly not sampled. These measurements
+vary across otherwise reproducible runs and are not benchmark claims.
+
+Evaluation `RunRecorder` and comparison relationship analysis retain full
+recording independent of training sampling settings. For full scalar training
+analysis with `examples/analyze_run.py`, use `--trace-worlds 0` with both
+intervals set to 1. The analyzer rejects incomplete sampled traces rather than
+reporting partial relationship histories as complete. Batched traces use a
+separate `batch_trace` format and are not input to that scalar analyzer.

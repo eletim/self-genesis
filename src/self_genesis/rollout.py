@@ -133,7 +133,8 @@ class RolloutCollector:
         while (steps < max_steps and bool(self.world.alive.any())
                and (horizon is None or self.elapsed_steps < horizon)):
             alive = self.world.alive.tolist()
-            policies = [_RecordingPolicy(agent, record_memory=self.recorder is not None)
+            policies = [_RecordingPolicy(agent, record_memory=(self.recorder is not None
+                        and self.recorder.samples_step(self)))
                         for agent in self.agents]
             result = self.protocol.step(policies)
             if self.recorder is not None:

@@ -11,7 +11,9 @@ import torch
 from self_genesis.batched_rollout import BatchedRollout, BatchedRolloutCollector
 from self_genesis.config import ExperimentConfig
 from self_genesis.experiment import resolve_device
-from self_genesis.observation import RunRecorder
+from self_genesis.observation import BatchedTraceRecorder, RunRecorder
+from self_genesis.training_metrics import (rollout_metrics, UpdateMeasurement,
+                                           measurement_metadata)
 from self_genesis.policy import RecurrentPolicy
 from self_genesis.rollout import Rollout, RolloutCollector
 from self_genesis.world import Action
@@ -151,6 +153,7 @@ class TrainingResult:
     value_loss: float
     action_entropy: float
     message_entropy: float
+    metrics: dict
 
 
 def train_episode(collector: RolloutCollector,
@@ -172,13 +175,14 @@ def train_episode(collector: RolloutCollector,
     optimizer.zero_grad(set_to_none=True)
     components.loss.backward()
     collector.detach()
+    metrics = rollout_metrics(rollout, collector.network)
     optimizer.step()
     result = TrainingResult(
         components.loss.item(), rollout.steps,
         tuple(sum(item.reward for item in items) for items in rollout.experiences),
         rollout.terminated, rollout.horizon_completed, config.training_method,
         components.actor_loss.item(), components.value_loss.item(),
-        components.action_entropy.item(), components.message_entropy.item())
+        components.action_entropy.item(), components.message_entropy.item(), metrics)
 
     if collector.recorder is not None:
         collector.recorder.record_training(result, optimizer)
@@ -197,6 +201,7 @@ class BatchedTrainingResult:
     value_loss: float
     action_entropy: float
     message_entropy: float
+    metrics: dict
 
 
 def train_batch(collector: BatchedRolloutCollector,
@@ -238,6 +243,7 @@ def train_batch(collector: BatchedRolloutCollector,
     if not bool(torch.stack([torch.isfinite(grad).all() for grad in gradients]).all()):
         optimizer.zero_grad(set_to_none=True)
         raise ValueError("Non-finite batched training gradients; optimizer update skipped")
+    metrics = rollout_metrics(rollout, collector.network)
     optimizer.step()
     returns = torch.stack([item.reward for item in rollout.experiences]).float().sum(0)
     return BatchedTrainingResult(
@@ -245,7 +251,7 @@ def train_batch(collector: BatchedRolloutCollector,
         tuple(tuple(row) for row in returns.tolist()),
         tuple(rollout.terminated.tolist()), tuple(rollout.horizon_completed.tolist()),
         config.training_method, components.actor_loss.item(), components.value_loss.item(),
-        components.action_entropy.item(), components.message_entropy.item())
+        components.action_entropy.item(), components.message_entropy.item(), metrics)
 
 
 def _validate_mixed_precision(config: ExperimentConfig, device: torch.device) -> None:
@@ -298,15 +304,18 @@ def _run_training(config: ExperimentConfig, output: Path) -> dict:
     optimizer = torch.optim.Adam(network.parameters(), lr=config.learning_rate)
     if config.batched:
         return _run_batched_training(config, output, network, optimizer)
-    with RunRecorder(output) as recorder:
+    with RunRecorder(output, training=True) as recorder:
         collector = RolloutCollector(config, network)
         # train_episode resets before collecting; do not record the unused
         # construction-time episode as part of this training run.
         collector.recorder = recorder
         total_steps = 0
         for _ in range(config.episodes):
+            measurement = UpdateMeasurement(device)
             result = train_episode(collector, optimizer)
             total_steps += result.steps
+            recorder._write("measurement", **measurement.finish(result.steps),
+                            metadata=measurement_metadata(device))
     return {"config": asdict(config), "resolved_device": str(device),
             "output": str(Path(output).resolve()), "episodes": config.episodes,
             "total_steps": total_steps, "last_training": asdict(result),
@@ -329,12 +338,19 @@ def _run_batched_training(config, output, network, optimizer):
         collector = BatchedRolloutCollector(config, network, seeds=seeds_for(0))
         record("batch_run", config=asdict(config), resolved_device=str(next(network.parameters()).device),
                parameter_count=network.parameter_count, random_algorithm="philox4x32-10",
-               encounter_seeds=seeds_for(0))
+               encounter_seeds=seeds_for(0),
+               measurement_metadata=measurement_metadata(next(network.parameters()).device))
+        trace_recorder = BatchedTraceRecorder(config, record)
         for update in range(config.episodes):
             seeds = seeds_for(update)
+            trace_recorder.update = update
+            collector.trace_recorder = (trace_recorder if config.trace_worlds
+                and update % config.trace_update_interval == 0 else None)
+            measurement = UpdateMeasurement(next(network.parameters()).device)
             result = train_batch(collector, optimizer, seeds=seeds)
             total_steps += sum(result.steps)
-            record("batch_training", update=update, seeds=seeds, **asdict(result))
+            record("batch_training", update=update, seeds=seeds, **asdict(result),
+                   measurement=measurement.finish(sum(result.steps)))
     return {"config": asdict(config), "resolved_device": str(next(network.parameters()).device),
             "output": str(Path(output).resolve()), "episodes": config.episodes * config.num_worlds,
             "updates": config.episodes, "total_steps": total_steps,

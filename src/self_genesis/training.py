@@ -1,11 +1,12 @@
 """Complete-episode Actor-Critic or REINFORCE using only survival rewards."""
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import torch
 
-from self_genesis.batched_rollout import BatchedRollout
+from self_genesis.batched_rollout import BatchedRollout, BatchedRolloutCollector
 from self_genesis.config import ExperimentConfig
 from self_genesis.experiment import resolve_device
 from self_genesis.observation import RunRecorder
@@ -180,6 +181,58 @@ def train_episode(collector: RolloutCollector,
     if collector.recorder is not None:
         collector.recorder.record_training(result, optimizer)
     return result
+
+
+@dataclass(frozen=True)
+class BatchedTrainingResult:
+    loss: float
+    steps: tuple[int, ...]
+    survival_returns: tuple[tuple[float, ...], ...]
+    terminated: tuple[bool, ...]
+    horizon_completed: tuple[bool, ...]
+    training_method: str
+    actor_loss: float
+    value_loss: float
+    action_entropy: float
+    message_entropy: float
+
+
+def train_batch(collector: BatchedRolloutCollector,
+                optimizer: torch.optim.Optimizer, *,
+                seeds: Sequence[int]) -> BatchedTrainingResult:
+    """Reset every world, finish all episodes, then update shared weights once.
+
+    Supply one reset seed per world and an optimizer for collector.network.
+    Encounter sampling streams continue across updates. Completed worlds freeze
+    until the entire batch finishes; no episode spans an optimizer update.
+    Losses average per-episode agent-normalized objectives. Returned statistics
+    are graph-free, with steps/endings by world and returns by world then agent.
+    """
+    config = collector.config
+    budget = _training_budget(config)
+    seeds = tuple(seeds)
+    if (len(seeds) != collector.world.steps.numel()
+            or any(type(seed) is not int or not 0 <= seed < 2**63 for seed in seeds)):
+        raise ValueError("Provide one integer seed in [0, 2**63) per world")
+    for world, seed in enumerate(seeds):
+        collector.reset(world, seed=seed)
+    rollout = collector.collect(budget)
+    components = survival_loss_components(
+        rollout, training_method=config.training_method,
+        value_loss_coefficient=config.value_loss_coefficient,
+        action_entropy_coefficient=config.action_entropy_coefficient,
+        message_entropy_coefficient=config.message_entropy_coefficient)
+    optimizer.zero_grad(set_to_none=True)
+    components.loss.backward()
+    collector.detach()
+    optimizer.step()
+    returns = torch.stack([item.reward for item in rollout.experiences]).float().sum(0)
+    return BatchedTrainingResult(
+        components.loss.item(), tuple(rollout.end_steps.tolist()),
+        tuple(tuple(row) for row in returns.tolist()),
+        tuple(rollout.terminated.tolist()), tuple(rollout.horizon_completed.tolist()),
+        config.training_method, components.actor_loss.item(), components.value_loss.item(),
+        components.action_entropy.item(), components.message_entropy.item())
 
 
 def _training_budget(config: ExperimentConfig) -> int:

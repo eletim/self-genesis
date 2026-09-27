@@ -897,3 +897,27 @@ Encounter sampling streams persist through reset. No collection call implicitly
 detaches state or updates weights, and `detach()` rejects unfinished objectives.
 Reset every row before collecting the next full batch for a shared-weight update.
 This API does not change the existing scalar training command.
+
+### Batched optimizer updates
+
+`train_batch` resets all rows, collects complete episodes under unchanged shared
+weights, then performs one optimizer update using the existing batched survival
+loss. Pass one reset seed per world; encounter sampling streams persist across
+calls. Renewable training requires an explicit `survival_horizon`.
+
+```python
+from self_genesis.training import train_batch
+
+optimizer = torch.optim.Adam(network.parameters(), lr=config.learning_rate)
+for _ in range(config.episodes):
+    result = train_batch(collector, optimizer, seeds=[11, 22])
+```
+
+Actor-Critic uses each agent's undiscounted survival return, detached advantages,
+value regression, and separately configured action and message entropy bonuses.
+Each world's loss is normalized by its starting agent count and averaged across
+worlds, including worlds that finish early. REINFORCE remains supported through
+`config.training_method`. Recurrent and entity-memory graphs span the complete
+objective and are detached before weights change. Results contain plain Python
+values: aggregate loss components, steps and ending flags by world, and survival
+returns indexed by world then agent. The sequential training CLI is unchanged.

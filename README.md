@@ -28,10 +28,47 @@ on the four-agent, horizon-16 workload. These are bounded execution measurements
 not evidence of improved learning or social behavior. BF16 remains optional.
 `compare` defaults to sequential training; `compare --batched` trains batched
 policies and evaluates their frozen weights on explicit held-out seeds using
-the sequential FP32 evaluator. It does not load training JSONL. The behavioral
-evidence below predates the scaling work.
+the sequential FP32 evaluator. It does not load training JSONL. The v0.0.5/v0.0.6
+behavioral evidence below predates the scaling work; the density results are
+recorded separately.
 
-[Controlled multi-seed 1/4/8/16-pair comparison and retained evidence](docs/controlled-density-comparison.md)
+## v0.0.8 encounter-density results
+
+[Issue #58](https://github.com/eletim/self-genesis/issues/58) motivates increasing
+repeat encounters from a sparse 32-agent world. Its account of v0.0.7 large-scale
+learning and memory use is research motivation, not a result established by the
+repository's retained v0.0.7 capacity/throughput sweep. That sweep measures
+execution, not learned selection.
+
+**Encounter density is the sole experimental change** across the controlled
+1/4/8/16-pair conditions within each architecture. Network dimensions,
+Actor-Critic coefficients, survival-only reward, renewable resource rules,
+Working Memory, affect, Appearance-keyed Entity Memory and communication stay
+fixed. Hidden production abilities and identity labels remain excluded from
+policy inputs. Disjoint encounters share one simultaneous resource resolution,
+Life decay and generation step; agents cannot participate twice in that step.
+
+The [controlled multi-seed comparison](docs/controlled-density-comparison.md)
+used 32 agents, small capacity, FP32, 128 worlds per update, 50 updates and
+horizon 32, with three training and three held-out seeds. Main learned mean
+lifetimes at 1/4/8/16 pairs were **10.3646 / 11.5035 / 12.8472 / 14.7986**;
+every seed remained below always-GIVE at the same density. Repeat encounters
+increased, but Entity Memory reset had zero lifetime effect in 11 of 12
+seed/density summaries and a +0.0104 effect in the other. Identity and Working
+Memory interventions were mixed. Both learned architectures stayed mixed-GIVE,
+with no consistent density-driven producer or prior-aid selection. These are
+bounded, largely null memory findings, not evidence of learned selection.
+Denser worlds mechanically permit more aid; survival gains alone do not isolate
+learning. Missing history bins remain null, and collapsed behavior in future
+runs must be reported rather than excluded.
+
+The [density workflow](docs/scaled-experiment-workflow.md#reproduce-the-controlled-density-experiment)
+provides reproduction and evidence-verification commands. The separate
+[RTX 5090 density benchmark](docs/rtx5090-density.md) supports 256 worlds as a
+starting point only for its small/FP32/horizon-16 workload: at 16 pairs it measured
+7,560 world steps/s, 110,779 encounters/s and 3.11 GiB peak device memory.
+The behavioral comparison deliberately retains its declared 128 worlds and
+longer horizon; the benchmark does not select a learning-optimal density.
 
 ## Batched-trained density evaluation
 

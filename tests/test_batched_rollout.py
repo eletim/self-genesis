@@ -69,7 +69,7 @@ class BatchedRolloutTests(unittest.TestCase):
                                 torch.testing.assert_close(g, e, atol=2e-6, rtol=2e-5)
 
     def test_budget_continuation_retains_full_recurrent_graph(self):
-        collector = self.collector(survival_horizon=3)
+        collector = self.collector(survival_horizon=3, num_agents=5, encounter_count=2)
         first = collector.collect(1)
         state = collector.state
         for tensor in (state.memory, state.affect, state.entities.values):
@@ -95,8 +95,8 @@ class BatchedRolloutTests(unittest.TestCase):
         self.assertIsNone(collector.state.memory.grad_fn)
 
     def test_split_collection_matches_uninterrupted_worlds(self):
-        collector = self.collector(survival_horizon=3)
-        reference = self.collector(survival_horizon=3)
+        collector = self.collector(survival_horizon=3, num_agents=5, encounter_count=2)
+        reference = self.collector(survival_horizon=3, num_agents=5, encounter_count=2)
         complete = reference.collect(10)
         split = collector.collect(1).extend(collector.collect(1)).extend(collector.collect(10))
         for actual, expected in zip(split.experiences, complete.experiences):

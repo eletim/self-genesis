@@ -26,6 +26,11 @@ def main() -> None:
                  "vocabulary_size", "max_message_length", "memory_dim", "affect_dim",
                  "entity_memory_dim", "episodes", "survival_horizon"):
         parser.add_argument("--" + name.replace("_", "-"), type=int)
+    density = parser.add_mutually_exclusive_group()
+    density.add_argument("--encounter-count", type=int,
+                         help="Maximum pairs per world step (default: 1)")
+    density.add_argument("--encounter-fraction", type=float,
+                         help="Living participation fraction in [0, 1]; pair count rounds down")
     parser.add_argument("--batched", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--num-worlds", type=int)
     parser.add_argument("--trace-worlds", type=int, nargs="*",

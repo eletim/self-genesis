@@ -220,7 +220,7 @@ def evaluate_policy(config: ExperimentConfig,
         memory_history.extend(dict(step=step, **event) for event in memory_events)
         relationships.record_step(dict(
             step=step, participants=[c['agent'] for c in callbacks if c['phase'] == 'action'],
-            callbacks=callbacks,
+            callbacks=callbacks, pairs=protocol.last_pairs,
             successful_transfers=[dict(donor=a, recipient=b)
                                   for a, b in result.successful_transfers],
             generated_points=result.generated_points.tolist()))

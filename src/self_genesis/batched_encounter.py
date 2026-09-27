@@ -34,7 +34,8 @@ class BatchedDecision:
 class BatchedEncounterResult:
     world: BatchedStepResult
     state: BatchedPolicyState
-    # [world, 2], ordered first/second; -1 for rows without an encounter.
+    # [world, 2 * capacity], consecutive first/second pairs; -1 pads unused pairs.
+    # Capacity is at least one, preserving the default [world, 2] layout.
     pairs: torch.Tensor
     decisions: tuple[BatchedDecision, ...]
 
@@ -104,17 +105,48 @@ class BatchedEncounterProtocol:
 
     def step(self, state: BatchedPolicyState) -> BatchedEncounterResult:
         world = self.world
-        eligible = ~world.done & (world.alive.sum(dim=1) >= 2)
-        uniforms = self._uniforms(eligible)
-        pairs = self._select(world.alive, uniforms)
-        agents = torch.arange(world.state.life.shape[1], device=world.state.life.device)
-        first = eligible[:, None] & (agents == pairs[:, :1])
-        second = eligible[:, None] & (agents == pairs[:, 1:])
+        living = world.alive & ~world.done[:, None]
+        population = living.sum(dim=1)
+        config = world.config
+        if config.encounter_fraction is None:
+            counts = (population // 2).clamp(max=min(config.encounter_count,
+                                                    config.num_agents // 2))
+        else:
+            counts = (config.encounter_fraction * population.double() / 2).floor().long()
+        capacity = max(1, config.encounter_pairs(config.num_agents))
+        targets = torch.full_like(world.state.life, -1)
+        pairs = []
+        decisions = []
+        completions = []
+        agents = torch.arange(config.num_agents, device=targets.device)
+        for slot in range(capacity):
+            eligible = counts > slot
+            uniforms = self._uniforms(eligible)
+            pair = self._select(living, uniforms)
+            pairs.append(torch.where(eligible[:, None], pair, -1))
+            first = eligible[:, None] & (agents == pair[:, :1])
+            second = eligible[:, None] & (agents == pair[:, 1:])
+            participants = first | second
+            living = living & ~participants
+            if not bool(eligible.any()):
+                continue
+            state, pair_targets, choices, completion = self._encounter(
+                state, pair, first, second, uniforms)
+            targets = torch.where(participants, pair_targets, targets)
+            decisions.extend(choices)
+            completions.append(completion)
+        result = world.step(targets)
+        for observation, actions, partner, participants in completions:
+            state = self.network.complete_encounter_batch(
+                observation, state, action=actions, gave=result.successful_transfers,
+                received=result.successful_transfers.gather(1, partner), active=participants)
+        return BatchedEncounterResult(result, state, torch.cat(pairs, dim=1), tuple(decisions))
+
+    def _encounter(self, state, pairs, first, second, uniforms):
+        """Collect one pair per eligible world without advancing resources or time."""
+        world = self.world
         participants = first | second
         targets = torch.full_like(world.state.life, -1)
-        if not bool(eligible.any()):
-            return BatchedEncounterResult(world.step(targets), state,
-                                          torch.full_like(pairs, -1), ())
         partner = torch.where(first, pairs[:, 1:], pairs[:, :1]).expand_as(targets)
         parameter = next(self.network.parameters())
         resources = torch.stack((world.state.life, world.state.points,
@@ -144,13 +176,7 @@ class BatchedEncounterProtocol:
                                       uniforms=uniforms[:, -1:])
         actions = torch.where(first, action1.choice, action2.choice)
         targets = torch.where(participants & (actions == 1), partner, targets)
-        result = world.step(targets)
-        # Retain pre-step resources/messages/Appearance, revealing final actions
-        # and successful transfers only to the two participants, even if they die.
+        # Retain pre-step resources/messages/Appearance until simultaneous resolution.
         completed = replace(first_observation, partner_action=actions.gather(1, partner) + 1)
-        state = self.network.complete_encounter_batch(
-            completed, state, action=actions, gave=result.successful_transfers,
-            received=result.successful_transfers.gather(1, partner), active=participants)
-        return BatchedEncounterResult(
-            result, state, torch.where(eligible[:, None], pairs, -1),
-            (message, reply, action1, action2))
+        return (state, targets, (message, reply, action1, action2),
+                (completed, actions, partner, participants))

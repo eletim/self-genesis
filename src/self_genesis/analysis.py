@@ -33,7 +33,8 @@ class RelationshipAnalysis:
                      {(t['donor'], t['recipient']) for t in transfers})
         pending = []
         for agent, callback in actions.items():
-            partner, = [i for i in record['participants'] if i != agent]
+            pairs = record.get('pairs', [record['participants']])
+            partner, = [other for pair in pairs if agent in pair for other in pair if other != agent]
             appearance = callback['observation']['partner_appearance']
             key = (agent, partner if self.history_by_partner else tuple(appearance))
             prior = self.history.get(key, dict(

@@ -703,9 +703,12 @@ regeneration. Rewards are per-agent living steps, without a GIVE bonus.
 survivors. Extinction on the horizon takes precedence. Completed rows freeze,
 return zero new rewards/transfers/generation, and retain their completion flags
 until reset. `successful_transfers` is a boolean `[world, donor]` mask whose
-recipients are the input targets. Separate CPU random streams reproduce each
-seed's sequential `World` initialization and generation on either device,
-independently of batch ordering or other worlds' deaths and resets.
+recipients are the input targets. Initialization matches each seed's sequential
+`World`. Device-side Philox streams supply regeneration uniforms independently
+of batch ordering or other worlds' deaths and resets. The batched generator
+consumes a full agent row per active step, masking out dead agents; its draws
+do not match the sequential survivor-only PyTorch RNG. Controlled-uniform tests
+verify the shared resource semantics.
 
 `BatchedEntityMemory` in `self_genesis.entity_memory` provides the corresponding
 Appearance-keyed memory storage primitive. Keys have shape
@@ -854,8 +857,8 @@ inactive batch returns no phases. Empty channels still update recurrence but
 have no sampled statistics. `result.world` contains the resource transition.
 These records retain graphs without accumulating history inside the executor.
 
-Per-world seeded CPU random streams feed tensor selection and sampling on the
-world device, without consuming global RNG state. Changing or resetting another
+Per-world seeded device-side Philox streams feed tensor selection and sampling
+on the world device, without consuming global RNG state. Changing or resetting another
 world does not change a world's stream. These streams reproduce batched runs,
 not the legacy Python encounter RNG sequence. Reset world resources with
 `world.reset(row, seed=...)` and recurrent/entity state with `state.reset(mask)`;
@@ -920,4 +923,49 @@ worlds, including worlds that finish early. REINFORCE remains supported through
 `config.training_method`. Recurrent and entity-memory graphs span the complete
 objective and are detached before weights change. Results contain plain Python
 values: aggregate loss components, steps and ending flags by world, and survival
-returns indexed by world then agent. The sequential training CLI is unchanged.
+returns indexed by world then agent. The training CLI can select this batched
+path as described below.
+
+
+### Batched training command
+
+```sh
+python -m self_genesis train --batched --num-worlds 64 --capacity-preset small \
+  --device auto --seed 42 --deterministic --episodes 3 \
+  --survival-horizon 8 --output batched-run.jsonl
+```
+
+Use `configs/batched.toml` for equivalent reusable settings. Sequential training
+remains the default; `--no-batched` selects it explicitly. In batched mode,
+`episodes` counts complete batch updates: three updates with 64 worlds train
+192 episodes. Each update averages the complete world objectives and updates
+one shared policy. `num_worlds` defaults to 64 and accepts any positive integer;
+64–256 are practical starting counts, with no fixed-size limit at 512–1024.
+Actual memory use depends on policy capacity, agent count and full episode length.
+
+`capacity_preset` in TOML or `--capacity-preset small|medium|large` selects the
+existing policy widths. A CLI preset overrides the TOML preset; explicit width
+settings in TOML override preset defaults, and CLI widths override both.
+`seed`, `device`, `deterministic`, `batched`, and `num_worlds` are also TOML settings.
+`--deterministic` enables PyTorch deterministic algorithms during training and
+sets the CUDA workspace configuration when unset before CUDA initialization;
+unsupported deterministic operations raise an error. For an existing Python
+process that has already used CUDA, start the process with
+`CUBLAS_WORKSPACE_CONFIG=:4096:8` in its environment. `--no-deterministic` disables this requirement.
+Backend algorithm settings are restored after the run.
+
+Each world starts with seed `(seed + world_index) % 2**63`. Update `u` resets
+resources with `(seed + u * num_worlds + world_index) % 2**63`; encounter/policy
+streams persist across updates. Regeneration uses a separate Philox stream.
+The Philox4x32-10 uniforms are generated in batched tensor operations on the
+selected device, consume four-value blocks, and match across CPU/CUDA. Inactive
+worlds do not advance their streams. Policy floating-point results and training
+need not match across devices or software versions.
+
+Batched JSONL contains one `batch_run` record with resolved settings, device,
+parameter count, RNG algorithm and initial encounter seeds, followed by one
+`batch_training` record per update. Each update records reset seeds, losses,
+steps and completion flags indexed by world, and survival returns indexed by
+world then agent. This compact format does not contain scalar encounter traces
+and is not input for the scalar `examples/analyze_run.py` tool. The final CLI
+JSON reports update count, total world episodes and total world steps.

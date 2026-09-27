@@ -5,6 +5,7 @@ from dataclasses import dataclass, fields, replace
 
 import torch
 
+from self_genesis.batched_random import BatchedRandom
 from self_genesis.config import ExperimentConfig
 from self_genesis.experiment import ExperimentState, initialize
 
@@ -40,10 +41,8 @@ class BatchedWorld:
             field.name: torch.stack([getattr(state, field.name) for state in states])
             for field in fields(ExperimentState)
         })
-        self._generation_rngs = [
-            torch.Generator(device="cpu").manual_seed(seed + 2) for seed in seeds
-        ]
         device = self.state.life.device
+        self._generation_rng = BatchedRandom(seeds, device=device, stream=1)
         self.steps = torch.zeros(len(seeds), dtype=torch.int64, device=device)
         self.terminated = torch.zeros(len(seeds), dtype=torch.bool, device=device)
         self.horizon_completed = torch.zeros_like(self.terminated)
@@ -63,7 +62,7 @@ class BatchedWorld:
         state = initialize(replace(self.config, seed=seed), seed_rng=False)
         for field in fields(ExperimentState):
             getattr(self.state, field.name)[world].copy_(getattr(state, field.name))
-        self._generation_rngs[world].manual_seed(seed + 2)
+        self._generation_rng.reset(world, seed)
         self.steps[world] = 0
         self.terminated[world] = False
         self.horizon_completed[world] = False
@@ -95,15 +94,8 @@ class BatchedWorld:
         state.points.sub_(transfers.to(state.points.dtype))
         state.life.add_(restored).sub_(alive.to(state.life.dtype)).clamp_(min=0)
         survivors = self.alive & active[:, None]
-        generated = torch.zeros_like(state.points)
-        # Match World's survivor-only CPU draws exactly. Only RNG sampling loops
-        # over worlds; GIVE routing and resource arithmetic operate on tensors.
-        for row, generator in enumerate(self._generation_rngs):
-            indices = survivors[row].nonzero().flatten()
-            draws = torch.rand(indices.numel(), generator=generator).to(state.life.device)
-            generated[row, indices] = (
-                draws < state.point_generation_probability[row, indices]
-            ).to(generated.dtype)
+        draws = self._generation_rng.uniform(state.life.shape[1], active)
+        generated = (survivors & (draws < state.point_generation_probability)).to(state.points.dtype)
         state.points.add_(generated)
         self.steps.add_(active.to(self.steps.dtype))
         self.terminated |= active & ~self.alive.any(dim=1)

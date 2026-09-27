@@ -1,0 +1,9 @@
+# Complete batch updates; use CLI flags to override these conditions.
+batched = true
+num_worlds = 64
+capacity_preset = "small"
+seed = 42
+device = "auto"
+deterministic = true
+episodes = 3
+survival_horizon = 8

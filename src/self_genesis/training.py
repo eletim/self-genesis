@@ -3,6 +3,8 @@
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
+import json
+import os
 
 import torch
 
@@ -245,6 +247,24 @@ def _training_budget(config: ExperimentConfig) -> int:
 
 
 def run_training(config: ExperimentConfig, output: Path) -> dict:
+    """Apply requested reproducibility controls and restore backend settings."""
+    previous = torch.are_deterministic_algorithms_enabled()
+    warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
+    try:
+        if config.deterministic and resolve_device(config.device).type == "cuda":
+            workspace = os.environ.get("CUBLAS_WORKSPACE_CONFIG")
+            if workspace not in (":4096:8", ":16:8"):
+                if workspace is not None or torch.cuda.is_initialized():
+                    raise ValueError("Deterministic CUDA requires CUBLAS_WORKSPACE_CONFIG=:4096:8 "
+                                     "before CUDA initialization; restart with this environment setting")
+                os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+        torch.use_deterministic_algorithms(config.deterministic)
+        return _run_training(config, output)
+    finally:
+        torch.use_deterministic_algorithms(previous, warn_only=warn_only)
+
+
+def _run_training(config: ExperimentConfig, output: Path) -> dict:
     """Run a fixed number of complete updates and persist observations to JSONL."""
     _training_budget(config)  # Validate before creating an output file.
     device = resolve_device(config.device)
@@ -255,6 +275,8 @@ def run_training(config: ExperimentConfig, output: Path) -> dict:
         memory_dim=config.memory_dim, affect_dim=config.affect_dim,
         entity_memory_dim=config.entity_memory_dim).to(device)
     optimizer = torch.optim.Adam(network.parameters(), lr=config.learning_rate)
+    if config.batched:
+        return _run_batched_training(config, output, network, optimizer)
     with RunRecorder(output) as recorder:
         collector = RolloutCollector(config, network)
         # train_episode resets before collecting; do not record the unused
@@ -268,3 +290,31 @@ def run_training(config: ExperimentConfig, output: Path) -> dict:
             "output": str(Path(output).resolve()), "episodes": config.episodes,
             "total_steps": total_steps, "last_training": asdict(result),
             "parameter_count": network.parameter_count}
+
+
+def _run_batched_training(config, output, network, optimizer):
+    """Record one complete update per batch, with outcomes indexed by world."""
+    def seeds_for(update):
+        return [(config.seed + update * config.num_worlds + row) % 2**63
+                for row in range(config.num_worlds)]
+
+    total_steps = 0
+    with Path(output).open("x", encoding="utf-8") as file:
+        def record(kind, **values):
+            file.write(json.dumps({"schema_version": 1, "type": kind, **values},
+                                  allow_nan=False, sort_keys=True) + "\n")
+            file.flush()
+
+        collector = BatchedRolloutCollector(config, network, seeds=seeds_for(0))
+        record("batch_run", config=asdict(config), resolved_device=str(next(network.parameters()).device),
+               parameter_count=network.parameter_count, random_algorithm="philox4x32-10",
+               encounter_seeds=seeds_for(0))
+        for update in range(config.episodes):
+            seeds = seeds_for(update)
+            result = train_batch(collector, optimizer, seeds=seeds)
+            total_steps += sum(result.steps)
+            record("batch_training", update=update, seeds=seeds, **asdict(result))
+    return {"config": asdict(config), "resolved_device": str(next(network.parameters()).device),
+            "output": str(Path(output).resolve()), "episodes": config.episodes * config.num_worlds,
+            "updates": config.episodes, "total_steps": total_steps,
+            "last_training": asdict(result), "parameter_count": network.parameter_count}

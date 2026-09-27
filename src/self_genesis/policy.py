@@ -7,18 +7,11 @@ from torch import nn
 from torch.distributions import Categorical
 from torch.nn import functional as F
 
+from self_genesis.config import CAPACITY_PRESETS
 from self_genesis.batched_policy import BatchedObservation, BatchedPolicyState
 from self_genesis.entity_memory import BatchedEntityMemory
 from self_genesis.encounter import EncounterExperience, Observation
 from self_genesis.world import Action
-
-
-# Working Memory/thought width, circulating affect width, Entity Memory width.
-CAPACITY_PRESETS = {
-    "small": (16, 4, 16),
-    "medium": (128, 32, 64),
-    "large": (512, 128, 256),
-}
 
 
 @dataclass(frozen=True)

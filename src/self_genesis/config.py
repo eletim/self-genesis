@@ -6,6 +6,13 @@ from pathlib import Path
 import tomllib
 
 
+CAPACITY_PRESETS = {
+    "small": (16, 4, 16),
+    "medium": (128, 32, 64),
+    "large": (512, 128, 256),
+}
+
+
 @dataclass(frozen=True)
 class ExperimentConfig:
     seed: int = 0
@@ -28,12 +35,18 @@ class ExperimentConfig:
     value_loss_coefficient: float = 0.5
     action_entropy_coefficient: float = 0.01
     message_entropy_coefficient: float = 0.01
+    batched: bool = False
+    num_worlds: int = 64
+    deterministic: bool = False
 
     def __post_init__(self) -> None:
+        for name in ("batched", "deterministic"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be a boolean")
         if self.training_method not in ("actor_critic", "reinforce"):
             raise ValueError("training_method must be actor_critic or reinforce")
         for name, minimum in (
-            ("seed", 0), ("num_agents", 2), ("appearance_dim", 1),
+            ("num_worlds", 1), ("seed", 0), ("num_agents", 2), ("appearance_dim", 1),
             ("initial_life", 1), ("initial_points", 0),
             ("vocabulary_size", 1), ("max_message_length", 0),
             ("memory_dim", 1), ("affect_dim", 1), ("episodes", 1),
@@ -69,6 +82,15 @@ class ExperimentConfig:
 
 def load_config(path: Path | None = None, **overrides: object) -> ExperimentConfig:
     values = {} if path is None else tomllib.loads(path.read_text())
+    preset = overrides.pop("capacity_preset", None)
+    configured_preset = values.pop("capacity_preset", None)
+    if preset is None:
+        preset = configured_preset
+    if preset is not None:
+        if not isinstance(preset, str) or preset not in CAPACITY_PRESETS:
+            raise ValueError("capacity_preset must be small, medium, or large")
+        values = {**dict(zip(("memory_dim", "affect_dim", "entity_memory_dim"),
+                            CAPACITY_PRESETS[preset])), **values}
     values.update({key: value for key, value in overrides.items() if value is not None})
     unknown = values.keys() - {field.name for field in fields(ExperimentConfig)}
     if unknown:

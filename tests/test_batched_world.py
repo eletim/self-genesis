@@ -1,6 +1,7 @@
 from dataclasses import fields, replace
 import random
 import unittest
+from unittest.mock import patch
 
 import torch
 
@@ -26,7 +27,7 @@ class BatchedWorldTests(unittest.TestCase):
         references = [World(replace(config, seed=seed), seed_rng=False) for seed in seeds]
         for row, world in enumerate(references):
             self.assert_state_equal(batch, row, world)
-        # Distinct death schedules exercise independent survivor-only RNG streams.
+        # Distinct death schedules exercise survivor masking with controlled draws.
         batch.state.life[0] = torch.tensor([1, 1, 1, 1], device=device)
         batch.state.life[1] = torch.tensor([0, 1, 3, 4], device=device)
         for row, world in enumerate(references):
@@ -38,7 +39,9 @@ class BatchedWorldTests(unittest.TestCase):
         for step in range(10):
             targets = torch.tensor([schedule[(step + row) % 3] for row in range(3)],
                                    device=device)
-            result = batch.step(targets)
+            draws = batch._generation_rng.uniform(config.num_agents, ~batch.done)
+            with patch.object(batch._generation_rng, 'uniform', return_value=draws):
+                result = batch.step(targets)
             totals += result.reward
             for row, world in enumerate(references):
                 if finished[row]:
@@ -49,7 +52,11 @@ class BatchedWorldTests(unittest.TestCase):
                 else:
                     decisions = [Decision() if target == -1 else Decision(Action.GIVE, target)
                                  for target in targets[row].tolist()]
-                    expected = world.step(decisions)
+                    # The scalar World samples only survivors; replay the same
+                    # uniforms after its transfer/decay arithmetic has run.
+                    with patch('self_genesis.world.torch.rand', side_effect=lambda *args, **kwargs:
+                               draws[row, world.alive].cpu()):
+                        expected = world.step(decisions)
                     expected_totals[row] += expected.reward
                     for name in ('reward', 'died', 'generated_points'):
                         self.assertTrue(torch.equal(getattr(result, name)[row],

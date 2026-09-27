@@ -372,6 +372,61 @@ NOTHING/GIVE, including probes with communication context. No intermediate memor
 affect, or Entity Memory is committed, and no decisions are sampled. Probes run
 without gradients and their records are never policy inputs or loss terms.
 
+### Matched Thought comparison
+
+Use `compare --compare-thought` to independently train the v0.0.8-compatible
+single Linear/tanh **shallow** policy and **recurrent-16 / recurrent-32** policies
+in one report. For example, this bounded CPU run uses identical density, capacity,
+learning coefficients, episode budgets and seeds across the three conditions:
+
+```sh
+python -m self_genesis compare --compare-thought --batched --deterministic \
+  --device cpu --num-agents 8 --encounter-count 4 --capacity-preset small \
+  --initial-life 4 --survival-horizon 8 --num-worlds 4 --episodes 5 \
+  --point-generation-probability-max 0.5 \
+  --training-seeds 100 200 300 --evaluation-seeds 1000 1001 \
+  --output /tmp/matched-thought.json
+```
+
+The output file must be new. This example trains nine networks, each for five
+updates of four worlds (180 training world episodes total), then performs 108
+held-out evaluations. Each training seed uses `seed + update * num_worlds + row`
+modulo `2**63`; evaluation seeds must exclude **all** these worlds, across all
+training seeds. Sequential training is also supported: it preserves the existing
+continuous episode sampling streams, and evaluation seeds must be disjoint from
+all training stream initialization seeds. Explicit evaluation seeds are required.
+Batched training is preferable when an explicit per-episode seed schedule is needed.
+
+The matrix overrides `--thought-mode` and `--think-steps` and automatically runs
+Entity Memory reset, Appearance shuffle, Appearance replacement and Working
+Memory reset separately, regardless of `--interventions`. It keeps the configured
+Entity Memory dimension for all three networks; the ordinary comparison's
+separately trained no-Entity-Memory control is not part of this matrix. Fixed
+always-GIVE, always-NOTHING and producer-oracle references share the evaluation
+worlds. Fixed reference results repeated across training seeds are not independent
+replicates. Evaluation always uses fresh state and frozen weights with the
+sequential FP32 reference; sampling streams restart for each intervention.
+
+Schema 4 retains the existing `training_runs`, `evaluations`, `summaries` and
+`intervention_effects`: survival with censoring, GIVE/NOTHING collapse, actual
+partner-history bins, first/repeat producer contrasts, communication usage and
+matched intervention deltas. Per-run configs and parameter counts make matching
+auditable. Capacity dimensions are matched, **not** parameter counts or compute:
+shallow has fewer parameters; recurrent-16 and recurrent-32 share the same count.
+Equal episode budgets need not produce equal encounter exposure.
+
+Each learned evaluation also contains `thought_samples`: the first communication
+and first action callback at world steps 0, 1 and 2 (at most six probes; absent
+callbacks are omitted). Every sample identifies its world step, agent and phase
+and records all intermediate Thought diagnostics described above. These bounded
+early-episode samples replay incoming state without sampling or persistent writes;
+they do not represent a population average or late-episode dynamics. Shallow emits
+one diagnostic step, recurrent policies emit 16 or 32. `thought_comparison` records
+the condition matrix, sampling and interpretation semantics. No probes run during
+training. Survival gains, communication entropy and apparent Thought convergence
+alone do not establish useful partner-specific memory; inspect supported history
+contrasts and matched intervention effects, retaining empty-bin nulls.
+
 Entity Memory stores one unlabeled latent value per distinct observed Appearance,
 using exact tensor equality for retrieval. An unseen Appearance retrieves zeros;
 identical Appearances share an entry, without hidden IDs. After each callback, a

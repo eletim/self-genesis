@@ -88,7 +88,7 @@ class EncounterProtocol:
 
         Empty messages are allowed. Tokens have no assigned meaning or effect
         on rewards. Invalid messages/actions leave world state unchanged.
-        With fewer than two survivors, time advances without policy calls.
+        With zero selected pairs, time advances without policy calls.
         After resolution, participants with a complete_encounter callback receive
         local experience, including the second action and successful gifts.
         """
@@ -125,12 +125,14 @@ class EncounterProtocol:
                 (second, first, second_observation, second_action, first_action),
             ))
         result = self.world.step(decisions)
+        # Index once to avoid scanning all transfers for every participant.
+        transfers = set(result.successful_transfers)
         for agent, partner, observation, action, partner_action in completions:
             # Completion is optional for fixed and external policies.
             complete = getattr(policies[agent], "complete_encounter", None)
             if complete is not None:
                 complete(EncounterExperience(
                     replace(observation, partner_action=partner_action), action,
-                    (agent, partner) in result.successful_transfers,
-                    (partner, agent) in result.successful_transfers))
+                    (agent, partner) in transfers,
+                    (partner, agent) in transfers))
         return result

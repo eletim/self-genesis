@@ -242,15 +242,17 @@ protocol = EncounterProtocol(world, seed=42, vocabulary_size=4, max_message_leng
 result = protocol.step([QuietPolicy() for _ in range(2)])
 ```
 
-Provide one policy per agent in state order. Each step uniformly samples two
-living agents without replacement; their sampled order assigns first/second
-roles. The protocol owns its seeded random generator, independent of global
-random draws. First sends one message, second observes it and replies, then
-first and second choose GIVE or NOTHING in that order. Both see the other's
+Provide one policy per agent in state order. By default, each step with at least
+two survivors uniformly samples one living pair without replacement. Encounter density
+selects disjoint pairs, including zero pairs with multiple survivors; sampled
+order assigns first/second roles within each pair. The protocol owns its seeded
+random generator, independent of global random draws. Within each pair, first
+sends one message, second observes it and replies, then first and second choose
+GIVE or NOTHING in that order. Both see the other's
 message when acting; second also sees first's chosen action. GIVE automatically
 targets the encounter partner. Gifts resolve simultaneously through the shared
 world, followed by one Life decay for every living agent, including those not
-selected. Fewer than two survivors means no communication or action callbacks;
+selected. Zero selected pairs means no communication or action callbacks;
 time still advances.
 
 Policy observations contain own Life/Points, partner Life/Points, a copy of the
@@ -496,9 +498,10 @@ GIVE, cooperation, or internal-state rewards. Memory, thought, and affect learn
 through recurrent gradients from the same objective. A disabled channel has no
 message loss but retains its internal-state update.
 
-Incomplete episodes, truncated segments, and episodes without sampled decisions
-are rejected by the loss. This minimal update uses full episode graphs and has
-no truncation bootstrap. CPU tests verify finite losses,
+Incomplete episodes and truncated segments are rejected by the loss. Complete
+zero-pair episodes return zero loss and skip backward and optimizer updates.
+This minimal update uses full episode graphs and has no truncation bootstrap.
+CPU tests verify finite losses,
 per-agent credit, nonzero gradients and parameter updates, including memory and
 affect feedback; they do not establish learned cooperation or communication.
 
@@ -1048,13 +1051,16 @@ result = protocol.step(state)
 state = result.state
 ```
 
-Each unfinished world with at least two survivors selects one uniform ordered
-living pair. Four batched phases preserve message, reply, first action and second
-action order. Only the second action sees the first action; completion reveals
+By default, each unfinished world with at least two survivors selects one uniform
+ordered living pair. Configurable encounter density selects disjoint pairs,
+including zero pairs with multiple survivors. Four batched phases preserve
+message, reply, first action and second action order. Only the second action sees
+the first action; completion reveals
 both final actions and successful transfers to the participants. Completion uses
 pre-step resources, messages and observed Appearance, including for participants
-who die at resolution. Unselected agents retain their state. Lone survivors
-advance time without policy decisions; completed worlds remain frozen.
+who die at resolution. Unselected agents retain their state. Worlds with zero
+selected pairs advance time without policy decisions; completed worlds remain
+frozen.
 
 `result.pairs` contains routing indices (`-1` for no encounter), never policy
 features. `result.decisions` holds the four phase observations, active masks,

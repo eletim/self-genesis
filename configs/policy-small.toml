@@ -2,3 +2,7 @@
 memory_dim = 16
 affect_dim = 4
 entity_memory_dim = 16
+
+# Thought architecture; shallow ignores the validated step count.
+thought_mode = "recurrent"
+think_steps = 16 # Integer >= 16; 32 and 64 reuse the same parameters.

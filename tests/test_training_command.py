@@ -87,7 +87,7 @@ class TrainingCommandTests(unittest.TestCase):
                 self.assertEqual(starts[0]['policy_settings'], {
                     'appearance_dim': 2, 'vocabulary_size': 5,
                     'max_message_length': 0, 'memory_dim': 7, 'affect_dim': 3,
-                    'entity_memory_dim': 5})
+                    'entity_memory_dim': 5, 'thought_mode': 'recurrent', 'think_steps': 16})
                 expected_count = RecurrentPolicy(**starts[0]['policy_settings']).parameter_count
                 self.assertEqual(summary['parameter_count'], expected_count)
                 self.assertTrue(all(r['parameter_count'] == expected_count for r in starts))

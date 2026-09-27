@@ -27,6 +27,8 @@ class ExperimentConfig:
     point_generation_probability_max: float = 0.0
     vocabulary_size: int = 4
     max_message_length: int = 3
+    thought_mode: str = "recurrent"
+    think_steps: int = 16
     memory_dim: int = 16
     affect_dim: int = 4
     entity_memory_dim: int = 16
@@ -60,6 +62,8 @@ class ExperimentConfig:
         for name in ("batched", "deterministic"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be a boolean")
+        if self.thought_mode not in ("recurrent", "shallow"):
+            raise ValueError("thought_mode must be recurrent or shallow")
         if self.training_method not in ("actor_critic", "reinforce"):
             raise ValueError("training_method must be actor_critic or reinforce")
         if self.mixed_precision not in ("fp32", "bf16"):
@@ -72,7 +76,7 @@ class ExperimentConfig:
             ("initial_life", 1), ("initial_points", 0),
             ("vocabulary_size", 1), ("max_message_length", 0),
             ("memory_dim", 1), ("affect_dim", 1), ("episodes", 1),
-            ("entity_memory_dim", 0),
+            ("entity_memory_dim", 0), ("think_steps", 16),
         ):
             value = getattr(self, name)
             if type(value) is not int or value < minimum:

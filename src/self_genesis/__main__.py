@@ -22,9 +22,12 @@ def main() -> None:
                         help="Independent comparison training seeds (default: configured seed)")
     parser.add_argument("--interventions", choices=INTERVENTIONS, nargs="+",
                         help="Additional frozen learned-policy evaluation treatments")
+    parser.add_argument("--compare-thought", action="store_true", default=None,
+                        help="Match shallow/recurrent-16/recurrent-32 with all interventions "
+                             "and sampled Thought probes; requires held-out evaluation seeds")
     for name in ("num_agents", "appearance_dim", "initial_life", "initial_points",
                  "vocabulary_size", "max_message_length", "memory_dim", "affect_dim",
-                 "entity_memory_dim", "episodes", "survival_horizon"):
+                 "entity_memory_dim", "episodes", "survival_horizon", "think_steps"):
         parser.add_argument("--" + name.replace("_", "-"), type=int)
     density = parser.add_mutually_exclusive_group()
     density.add_argument("--encounter-count", type=int,
@@ -39,6 +42,8 @@ def main() -> None:
     parser.add_argument("--trace-step-interval", type=int)
     parser.add_argument("--mixed-precision", choices=("fp32", "bf16"),
                         help="Optional CUDA BF16 autocast for batched training (default: fp32)")
+    parser.add_argument("--thought-mode", choices=("recurrent", "shallow"),
+                        help="Thought architecture (default: recurrent; think-steps >= 16)")
     parser.add_argument("--capacity-preset", choices=CAPACITY_PRESETS)
     parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--learning-rate", type=float)
@@ -56,11 +61,12 @@ def main() -> None:
         parser.error(f"{args.command} requires --output pointing to a new results file")
     if args.command == "init" and args.output is not None:
         parser.error("--output is only supported for train or compare")
-    for option in ("evaluation_seeds", "training_seeds", "interventions"):
+    for option in ("evaluation_seeds", "training_seeds", "interventions", "compare_thought"):
         if args.command != "compare" and getattr(args, option) is not None:
             parser.error(f"--{option.replace('_', '-')} is only supported for compare")
     overrides = vars(args).copy()
-    for key in ("command", "output", "config", "evaluation_seeds", "training_seeds", "interventions"):
+    for key in ("command", "output", "config", "evaluation_seeds", "training_seeds",
+                "interventions", "compare_thought"):
         overrides.pop(key)
     try:
         config = load_config(args.config, **overrides)
@@ -69,7 +75,8 @@ def main() -> None:
         if args.command == "compare":
             result = run_comparison(config, args.output, evaluation_seeds=args.evaluation_seeds,
                                     training_seeds=args.training_seeds,
-                                    interventions=args.interventions or ())
+                                    interventions=args.interventions or (),
+                                    compare_thought=bool(args.compare_thought))
             print(json.dumps(result, sort_keys=True))
             return
         if args.command == "train":

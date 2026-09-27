@@ -30,14 +30,18 @@ class PolicyState:
 class RecurrentPolicy(nn.Module):
     """Shared weights only; no individual state or identity labels.
 
-    Previous memory and unlabeled affect feed thought and the next memory
-    update. New affect depends on the observation, thought and updated memory,
-    and feeds the following callback. Message slots have no assigned meaning.
+    Callback-local Thought starts at zero and recurs with fixed context through
+    one shared Linear/ReLU core for think_steps (>=16). Shallow mode retains the
+    original single Linear/tanh comparison. Previous memory and unlabeled affect
+    feed Thought and the single post-loop memory update. New affect depends on
+    the observation, Thought and updated memory, and feeds the following callback.
+    Message slots have no assigned meaning.
     """
 
     def __init__(self, appearance_dim: int, *, vocabulary_size: int = 4,
                  max_message_length: int = 3, memory_dim: int = 16,
-                 affect_dim: int = 4, entity_memory_dim: int = 16):
+                 affect_dim: int = 4, entity_memory_dim: int = 16,
+                 think_steps: int = 16, thought_mode: str = "recurrent"):
         super().__init__()
         for name, value, minimum in (
             ("appearance_dim", appearance_dim, 1),
@@ -45,9 +49,14 @@ class RecurrentPolicy(nn.Module):
             ("max_message_length", max_message_length, 0),
             ("memory_dim", memory_dim, 1), ("affect_dim", affect_dim, 1),
             ("entity_memory_dim", entity_memory_dim, 0),
+            ("think_steps", think_steps, 16),
         ):
             if type(value) is not int or value < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
+        if thought_mode not in ("recurrent", "shallow"):
+            raise ValueError("thought_mode must be recurrent or shallow")
+        self.think_steps = think_steps
+        self.thought_mode = thought_mode
         self.appearance_dim = appearance_dim
         self.vocabulary_size = vocabulary_size
         self.max_message_length = max_message_length
@@ -57,8 +66,9 @@ class RecurrentPolicy(nn.Module):
         # Four resources, role, three partner-action categories, callback phase,
         # appearance, and ordered message slots (including an empty category).
         input_dim = 9 + appearance_dim + max_message_length * (vocabulary_size + 1)
+        context_dim = input_dim + memory_dim + affect_dim + entity_memory_dim
         self.thought = nn.Linear(
-            input_dim + memory_dim + affect_dim + entity_memory_dim, memory_dim)
+            context_dim + (memory_dim if thought_mode == "recurrent" else 0), memory_dim)
         self.memory_update = nn.GRUCell(memory_dim + affect_dim, memory_dim)
         self.affect_update = nn.Linear(input_dim + 2 * memory_dim, affect_dim)
         self.message_head = nn.Linear(memory_dim, vocabulary_size)
@@ -85,9 +95,26 @@ class RecurrentPolicy(nn.Module):
         """Exact shared parameter count, excluding per-agent episode state."""
         return sum(parameter.numel() for parameter in self.parameters())
 
+    def _think(self, context, previous_memory):
+        """Yield callback-local steps without retaining a trace."""
+        if self.thought_mode == "shallow":
+            yield torch.tanh(self.thought(context))
+        else:
+            # BF16 rounding near zero changes ReLU gates repeatedly through
+            # the shared core and can distort full-episode gradients. Keep
+            # this recurrence in the parameter dtype, with its graph intact.
+            context = context.to(self.thought.weight)
+            thought = torch.zeros_like(previous_memory).to(context)
+            for _ in range(self.think_steps):
+                with torch.autocast(device_type=context.device.type, enabled=False):
+                    thought = F.relu(self.thought(torch.cat((context, thought), dim=-1)))
+                yield thought
+
     def _recur(self, inputs, previous_memory, previous_affect, retrieved):
-        thought = torch.tanh(self.thought(torch.cat(
-            (inputs, previous_memory, previous_affect, retrieved), dim=-1)))
+        context = torch.cat((inputs, previous_memory, previous_affect, retrieved), dim=-1)
+        # Only Thought advances inside the loop; keep its full training graph.
+        for thought in self._think(context, previous_memory):
+            pass
         memory = self.memory_update(torch.cat((thought, previous_affect), dim=-1),
                                     previous_memory)
         affect = torch.tanh(self.affect_update(torch.cat((inputs, thought, memory), dim=-1)))

@@ -47,7 +47,7 @@ class EntityMemoryTests(unittest.TestCase):
             logits, _ = self.network(self.a, state, communicating=communicating)
             missing, _ = self.network(self.a, replace(state, entities=()), communicating=communicating)
             hook.remove()
-            self.assertFalse(torch.equal(thoughts[0], thoughts[1]))
+            self.assertFalse(torch.equal(thoughts[0], thoughts[self.network.think_steps]))
             self.assertFalse(torch.equal(logits, missing))
             self.network.zero_grad()
             # A policy-gradient term, with a scalar survival return and no latent labels.
@@ -91,7 +91,7 @@ class EntityMemoryTests(unittest.TestCase):
         legacy.value_head = nn.Linear(16, 1)
         rng = torch.get_rng_state()
         torch.manual_seed(29)
-        network = RecurrentPolicy(3, entity_memory_dim=0)
+        network = RecurrentPolicy(3, entity_memory_dim=0, thought_mode="shallow")
         self.assertTrue(torch.equal(rng, torch.get_rng_state()))
         self.assertEqual(legacy.state_dict().keys(), network.state_dict().keys())
         for name, value in legacy.state_dict().items():

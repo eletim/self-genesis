@@ -13,7 +13,7 @@ self-genesis は、複数の学習Agentが他者との相互作用を通じて�
 
 本書と[代表シナリオ](representative-scenarios.md)は、
 [Issue #15](https://github.com/eletim/self-genesis/issues/15)で導入する環境の契約を定める。
-再生成・有限horizon・解析ログを含むこの環境契約はv0.0.5 / v0.0.6 / v0.0.7 / v0.0.8でも維持する。
+再生成・有限horizon・解析ログを含むこの環境契約はv0.0.5 / v0.0.6 / v0.0.7 / v0.0.8 / v0.0.9でも維持する。
 v0.0.3の初期Pointを使い切る環境と比較し、他者を区別して過去の関係を利用することが
 生存上有利になり得る環境圧を調べる。援助相手の選別や協力が必ず学習されるとは仮定しない。
 
@@ -164,6 +164,87 @@ world / Agent / slot番号、hidden trait、生成量、解析履歴、oracle情
 逐次referenceとbatched実行でmatching・役割・選択結果・生成抽選を揃え、
 重複参加がないこと、同時GIVE、死亡・horizon、Rewardと記憶の情報境界を比較する。
 既定の1 pair、複数pair、奇数人口、人口減少、0 pair・単独生存を検証対象とする。
+
+## v0.0.9 のThought loop契約（Issue #70）
+
+[Issue #70](https://github.com/eletim/self-genesis/issues/70)では、単発の浅いThought変換を、
+同一Thought Coreによる自己再帰へ拡張した。以下の契約はsequential / batched実装に反映され、
+CPU / CUDAのThoughtテストで検証されている。変更対象は内部思考であり、renewable resource world、
+Encounter density、Communicationとsurvival-onlyのActor-Criticは維持する。
+
+実装では`thought_mode = "recurrent"`を既定とし、比較専用の`"shallow"`は従来の
+単発Linear → tanhを保持する。以下の反復契約はrecurrentに適用する。
+shallowでも`think_steps`は16以上の整数として検証するが、計算回数には使用しない。
+第9節のObservation・記憶・感性の循環はcallback間で保ち、loop内ではContextを固定する。
+
+[実験workflow](scaled-experiment-workflow.md#reproduce-the-thought-experiments)から
+[計算性能](rtx5090-recurrent-thought.md)と[matched comparison](controlled-thought-comparison.md)を
+再現・検証できる。16 / 32 stepは全seedで同じ生存・援助・選択指標となり、
+shallowとの生存差は2 seedで正、1 seedで負だった。全学習policyがalways-GIVEを下回り、
+recurrentのEntity Memory resetによる生存差は全seedで0だった。
+実装契約の達成と、協力・相手別記憶の有用性という研究目標の達成は区別する。
+throughput、mixed-GIVE、内部状態の収束や履歴との相関だけでは後者を主張しない。
+
+### Thought Stateの初期化と寿命
+
+Thought Stateは1回のpolicy callback内だけで更新する一時的な内部思考状態であり、
+Encounterをまたいで保持するWorking Memoryとは別物とする。
+message / reply / actionなどの各callback開始時に、その時点で利用可能なObservation、
+その個体のWorking Memory・感性、Appearanceから検索したEntity MemoryをContextとして確定する。
+Thought_0はcallbackごとにゼロで初期化し、前callbackの最終Thoughtを直接引き継がない。
+過去の経験は既存のWorking Memory・感性・Entity Memoryを通じてContextへ入る。
+
+```text
+Context = (Observation, Working Memory, Affect, Retrieved Entity Memory)
+Thought_0 = zeros
+Thought_k = F(Context, Thought_(k-1))  # k = 1, ..., think_steps
+```
+
+最終Thoughtを使ってloop完了後にWorking Memoryと感性を各1回更新し、
+そのcallbackのAction / Message / Valueを計算する。Entity Memoryの既存のcallback更新と
+Encounter完了時のparticipant-visibleな経験の書き込みも維持し、think stepごとには書き込まない。
+Thought Stateはcallback終了で破棄するが、学習用の計算graphはloss処理まで保持する。
+Working Memory・感性・Entity Memoryは各個体・worldに分離して次のcallbackやEncounterへ
+引き継ぎ、episode境界でresetする。Thoughtを新規初期化するためにこれらの記憶をresetしない。
+
+### 同一Coreを最低16回適用する
+
+`think_steps`は設定可能な整数で、既定値は16、最小値も16とする。
+16未満、非整数、真偽値は設定エラーとし、32 / 64なども同じ契約で比較可能にする。
+全think stepで同一のFの重みを共有し、直前のThought出力を次のThought入力へ戻す。
+16個の独立した層やCoreを並べたり、Contextだけから同じ出力を繰り返し計算したりしない。
+Fの主要活性化はReLUとし、単純なLinear → tanhをThoughtの中心構造として維持しない。
+Residual connectionやLayerNormは許容するが、深いfeed-forward stackで自己再帰を代替しない。
+設定回数を完走し、収束したように見えても早期終了で16回未満にしない。
+
+### loop中はContextと外界時間を固定する
+
+loop中に変える状態はThoughtだけとする。Observation・Working Memory・感性・検索済み
+Entity Memoryはloop開始時の値を保持し、途中の再観測・再検索・記憶更新を行わない。
+この固定は値の固定であり、Contextやthink step間の学習graphをdetachすることではない。
+World step・horizon時計、Life減少・死亡判定、Point生成、Reward、Encounterの進行は停止する。
+途中のThoughtからmessageやactionを送出・実行して新たな外部Contextを作らない。
+
+loop完了後に既存のmessage → reply → first action → second actionの順序で進み、
+次のcallbackはその段階で正当に利用可能になった情報で新しいContextとThought_0を作る。
+後手が先手の行動を観測できる時点も変えず、未来の選択や他pairの結果を先取りしない。
+全pairの行動が揃ってから同時GIVE、Life減少・死亡、Point生成、Rewardを従来どおり解決する。
+think_stepsやpair数によってworldの時計・資源更新・Rewardを増やさず、非参加個体に
+架空のcallbackや記憶更新を作らない。
+
+### 維持する学習・情報境界
+
+GPU-native batched実行を維持し、think stepごとに各world・個体のThoughtを独立に扱う。
+共有するのはCoreの重みであり、per-agent Python loopへ戻さない。
+完全episodeのActor-Critic、開始時Agent数によるloss正規化とepisode平均を維持し、
+内部think stepを追加のdecisionやRewardとして数えない。Thought loopと既存のrecurrent
+記憶を通る勾配を保持し、PPO、Value bootstrap、truncated BPTT、social reward、
+補助的な教師信号を導入しない。
+
+world / Agent / slot番号、hidden generation ability、実際の生成量、解析専用履歴、oracle情報を
+Context・Thought初期化・Actor / Criticや記憶へ追加しない。Appearance-keyed Entity Memoryと
+participant-visibleな経験の境界を守り、identity・Communication・感性の意味を教師として与えない。
+内部Thoughtの変化や生存の改善だけで、相手別の記憶利用や協力の獲得を結論しない。
 
 ## 1. シンプルさを優先する
 

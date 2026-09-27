@@ -3,7 +3,7 @@
 These scenarios are durable examples of the behavior self-genesis is intended to study.
 They are not fixed expected outputs and should not be treated as hard-coded policies for the agents.
 The v0.0.4 resource rules follow the [Issue #15 design contract](design-principles.md),
-including its step order, and remain in force for v0.0.8.
+including its step order, and remain in force for v0.0.9.
 Appearance-keyed Entity Memory and completion writes are implemented and tested;
 the social interpretations in these scenarios remain hypotheses, not guaranteed
 learning outcomes. v0.0.7 adds capacity presets and batched execution without
@@ -12,7 +12,9 @@ adding social rewards, identity labels or supervised meanings. Follow the
 validated mechanics, measured execution performance and held-out behavior.
 The [v0.0.8 density contract](design-principles.md) changes only the number of
 random disjoint encounters per world step. The density scenarios below specify
-that contract; they do not claim that multi-pair execution is already implemented.
+the implemented and tested multi-pair behavior. v0.0.9 also implements the
+callback-local Thought lifecycle in scenarios 16–17; scenario 18 separates its
+measured outcomes from the social hypotheses.
 
 ## 1. 他者からのみLifeを回復できる
 
@@ -192,3 +194,63 @@ decision数によるlossの再正規化やsocial reward、補助教師信号を�
 同じ有限horizonで反復回数、生存、相手別履歴に依存する行動、Entity Memory resetや
 Appearanceへの介入の影響を調べる。生存だけが伸びる場合、記憶介入が無影響な場合、
 常時GIVE / NOTHINGに偏る場合も許容し、関係記憶や協力の獲得を必須結果にしない。
+
+## 16. Thoughtは判断ごとに始まり、Working Memoryは残る（v0.0.9）
+
+[Issue #70のThought loop契約](design-principles.md)では、
+AがBへのmessageを作るcallbackでThought_0をゼロから初期化する。
+その時点のObservation・Working Memory・感性・検索済みEntity Memoryを固定し、
+同一のReLU-based Coreへ直前のThoughtを戻して、既定で16回更新する。
+Working Memoryと感性は途中では更新せず、最終Thoughtから各1回更新する。
+Entity Memoryもthink stepごとの書き込みをせず、既存のcallback更新と完了書き込みを維持する。
+これはsequential / batchedで実装・テスト済みの挙動であり、記憶が有用に学習されたという主張ではない。
+
+Bのreplyを受けてAがactionを選ぶcallbackでは、その時点の正当な観測と更新済みの記憶で
+Contextを作り直す。Thoughtは再びゼロから始め、message時のThoughtを直接持ち越さない。
+一方、Working Memory・感性・Entity Memoryは残り、CとのEncounterを挟んだ後の
+Bとの再Encounterにも利用できる。episode境界ではこれらの記憶もresetする。
+一時的なThoughtの破棄は、完全episodeのlossに必要な学習graphのdetachを意味しない。
+
+## 17. 16回考えても外界は16step進まない（v0.0.9）
+
+シナリオ14のA–BとC–Dが各callbackで16回のThought loopを行っても、
+loop中にLife / Point、world step、horizon、Rewardは変わらない。
+Point生成・死亡判定も起こらず、Encounterは次のmessageやactionへ進まない。
+Aのloop途中でBの新しいreplyやC–Dの情報を注入せず、検索済みEntity Memoryも固定する。
+全pairの選択完了後に初めて通常の資源解決を行い、シナリオ14と同じ選択・生成抽選なら
+同じ資源結果と各個体1のRewardになる。非参加のEに架空の思考callbackを作らない。
+
+`think_steps = 32`や64なら同じCoreをその回数だけ適用し、world時間はやはり1stepだけ進む。
+未指定なら16、15・0・16.5・真偽値は設定エラーとする。
+16個の別Coreによる計算や早期終了で最低回数を省略する実装はこの契約を満たさない。
+内部反復は追加のaction / message samplingやlossのdecision数にはならず、
+学習は既存の完全episode・survival-only Actor-Criticに従う。
+Thoughtが変化し続けることや協力を獲得することは保証せず、解析結果も教師信号にしない。
+生成能力・ID・oracle情報をThoughtの初期値やContextへ渡して推論を助けることもしない。
+
+## 18. 長く考えることと有用な判断を区別する（v0.0.9）
+
+`thought_mode = "recurrent"`と`think_steps = 16`が既定で、CLIでは
+`--thought-mode recurrent --think-steps 32`のように指定する。
+比較用の`shallow`は従来の単発tanhであり、16以上として検証される回数設定を使用しない。
+[再現コマンドと検証手順](scaled-experiment-workflow.md#reproduce-the-thought-experiments)で
+CPU smoke、保持済みevidenceの検証、CUDAでの全条件再実行を区別する。
+
+[事前選択した最初のaction callback](controlled-thought-dynamics.md)では、
+recurrent-32の相対変化が0.001以下になる最初のstepはseed順に19 / 13 / 14だった。
+seed 10000の16-step probeは閾値に達しなかったが、そこで計算を延長したり、
+他seedで早期終了したりはしない。途中のlogit / valueは観察用の仮想readoutであり、
+途中でactionをsampleしたりWorking Memoryを更新したりしない。
+
+[matched comparison](controlled-thought-comparison.md)では、16 / 32 stepの生存・援助・
+選択指標に改善差はなく、shallowより生存が長いseedが2つ、短いseedが1つだった。
+全学習policyがmixed-GIVEでもalways-GIVEを下回り、recurrentのEntity Memory resetは
+全seedで生存差0だった。履歴との正の関連や僅かなtoken差だけで返報・相手認識・
+有用なCommunicationを結論しない。null binは0として扱わない。
+
+[RTX 5090 benchmark](rtx5090-recurrent-thought.md)の256 worldsでは、16 / 32 stepが
+それぞれ6,653.9 / 5,734.0 world steps/s、peak allocated memoryが3.442 / 4.872 GiBだった。
+これはsmall・FP32・horizon 16の短期測定であり、horizon 32の学習比較とは別である。
+同じepisode数でもcompute・実際のEncounter数は異なり、shallowとの比較は活性化・
+初期化・parameter数も異なる。3 training seed・3 held-out worldの結果を一般的な
+協力獲得や記憶利用の証拠へ拡張しない。

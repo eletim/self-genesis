@@ -20,6 +20,7 @@ from self_genesis.policy import AgentPolicy, PolicyState, RecurrentPolicy
 from self_genesis.rollout import RolloutCollector
 from self_genesis.training import (train_episode, train_batch, reproducible_execution,
                                    _validate_mixed_precision)
+from self_genesis.thought_diagnostics import probe_thought_steps
 from self_genesis.world import Action, World
 
 
@@ -44,6 +45,10 @@ INTERVENTION_SEMANTICS = {
         'callbacks within the encounter; affect can still carry history.'),
 }
 INTERVENTIONS = tuple(INTERVENTION_SEMANTICS)
+THOUGHT_CONDITIONS = (("shallow", "shallow", 16),
+                      ("recurrent-16", "recurrent", 16),
+                      ("recurrent-32", "recurrent", 32))
+THOUGHT_SAMPLE_STEPS = (0, 1, 2)
 
 
 class _AppearanceShuffleProtocol(EncounterProtocol):
@@ -133,11 +138,25 @@ class ProducerOracle:
 
 
 class _EvaluationRecorder:
-    def __init__(self, policy, index, callbacks, memory_events):
+    def __init__(self, policy, index, callbacks, memory_events, thought_samples=None, step=0):
         self.policy = policy
         self.index = index
         self.callbacks = callbacks
         self.memory_events = memory_events
+        self.thought_samples = thought_samples
+        self.step = step
+
+    def _probe(self, observation, phase):
+        if (self.thought_samples is None or not isinstance(self.policy, AgentPolicy)
+                or self.step not in THOUGHT_SAMPLE_STEPS
+                or any(row['step'] == self.step and row['phase'] == phase
+                       for row in self.thought_samples)):
+            return
+        self.thought_samples.append(dict(
+            step=self.step, agent=self.index, phase=phase,
+            dynamics=[asdict(row) for row in probe_thought_steps(
+                self.policy.network, observation, self.policy.state,
+                communicating=phase == 'communication')]))
 
     def _record_memory(self, observation, before, phase):
         if isinstance(self.policy, AgentPolicy):
@@ -148,6 +167,7 @@ class _EvaluationRecorder:
 
     def communicate(self, observation):
         before = self.policy.state if isinstance(self.policy, AgentPolicy) else None
+        self._probe(observation, "communication")
         message = tuple(self.policy.communicate(observation))
         self._record_memory(observation, before, "message")
         self.callbacks.append(dict(agent=self.index, phase="communication", message=message))
@@ -162,6 +182,7 @@ class _EvaluationRecorder:
 
     def act(self, observation):
         before = self.policy.state if isinstance(self.policy, AgentPolicy) else None
+        self._probe(observation, "action")
         action = self.policy.act(observation)
         self._record_memory(observation, before, "action")
         self.callbacks.append(dict(
@@ -181,7 +202,7 @@ def _budget(config):
 @torch.no_grad()
 def evaluate_policy(config: ExperimentConfig,
                     network: RecurrentPolicy | Action | type[ProducerOracle], *,
-                    intervention: str | None = None) -> dict:
+                    intervention: str | None = None, sample_thought: bool = False) -> dict:
     """Fresh world and policy state for one seed; never update learned weights."""
     if intervention is not None and intervention not in INTERVENTIONS:
         raise ValueError(f"Unknown intervention: {intervention}")
@@ -205,6 +226,7 @@ def evaluate_policy(config: ExperimentConfig,
     relationships = RelationshipAnalysis(initial, history_by_partner=True)
     messages = []
     memory_history = []
+    thought_samples = [] if sample_thought else None
     returns = [0.0] * config.num_agents
     death_steps = [None] * config.num_agents
     for step in range(budget):
@@ -217,7 +239,8 @@ def evaluate_policy(config: ExperimentConfig,
                 policy.state = PolicyState(policy.state.memory, policy.state.affect)
         callbacks = []
         memory_events = []
-        result = protocol.step([_EvaluationRecorder(policy, i, callbacks, memory_events)
+        result = protocol.step([_EvaluationRecorder(policy, i, callbacks, memory_events,
+                                                   thought_samples, step)
                                 for i, policy in enumerate(policies)])
         memory_history.extend(dict(step=step, **event) for event in memory_events)
         relationships.record_step(dict(
@@ -255,20 +278,23 @@ def evaluate_policy(config: ExperimentConfig,
         partner_history_metrics=partner_history_metrics(rows),
         encounter_exposure=relationships.encounter_exposure(),
         entity_memory_events=memory_history,
+        **({"thought_samples": thought_samples} if sample_thought else {}),
         communication_messages=messages,
         communication=communication_metrics([row['message'] for row in messages],
                                             config.vocabulary_size))
 
 
 def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=None,
-                   training_seeds=None, interventions=()) -> dict:
+                   training_seeds=None, interventions=(), compare_thought=False) -> dict:
     """Independently train each seed and evaluate matched frozen populations."""
     with reproducible_execution(config):
         return _run_comparison(config, output, evaluation_seeds=evaluation_seeds,
-                               training_seeds=training_seeds, interventions=interventions)
+                               training_seeds=training_seeds, interventions=interventions,
+                               compare_thought=compare_thought)
 
 
-def _run_comparison(config, output, *, evaluation_seeds, training_seeds, interventions):
+def _run_comparison(config, output, *, evaluation_seeds, training_seeds, interventions,
+                    compare_thought):
     _budget(config)
     seeds = [config.seed] if evaluation_seeds is None else list(evaluation_seeds)
     train_seeds = [config.seed] if training_seeds is None else list(training_seeds)
@@ -280,6 +306,10 @@ def _run_comparison(config, output, *, evaluation_seeds, training_seeds, interve
     if len(set(interventions)) != len(interventions) or any(
             item not in INTERVENTIONS for item in interventions):
         raise ValueError("Interventions must be unique supported names")
+    if compare_thought:
+        if evaluation_seeds is None or set(seeds) & set(train_seeds):
+            raise ValueError("Thought comparison requires explicit held-out evaluation_seeds")
+        interventions = list(INTERVENTIONS)
     training_conditions = [replace(config, seed=seed) for seed in train_seeds]
     if config.batched:
         if evaluation_seeds is None:
@@ -290,6 +320,7 @@ def _run_comparison(config, output, *, evaluation_seeds, training_seeds, interve
             raise ValueError("Evaluation seeds must be held out from every batched training world")
     conditions = [replace(config, seed=seed, batched=False, mixed_precision="fp32",
                           trace_worlds=()) for seed in seeds]
+    evaluation_options = {"sample_thought": True} if compare_thought else {}
     device = resolve_device(config.device)
     _validate_mixed_precision(config, device)
     # Exclusive creation prevents a repeated command from overwriting a report.
@@ -298,17 +329,24 @@ def _run_comparison(config, output, *, evaluation_seeds, training_seeds, interve
         for training_config in training_conditions:
             learned = []
             # A zero dimension explicitly requests the disabled-only legacy condition.
-            dimensions = [("learned", config.entity_memory_dim)]
+            variants = [("learned", config.entity_memory_dim, config.thought_mode,
+                         config.think_steps)]
             if config.entity_memory_dim:
-                dimensions.append(("learned-no-entity-memory", 0))
-            for name, dimension in dimensions:
-                learning_config = replace(training_config, entity_memory_dim=dimension)
+                variants.append(("learned-no-entity-memory", 0, config.thought_mode,
+                                 config.think_steps))
+            if compare_thought:
+                variants = [(name, config.entity_memory_dim, mode, steps)
+                            for name, mode, steps in THOUGHT_CONDITIONS]
+            for name, dimension, mode, steps in variants:
+                learning_config = replace(training_config, entity_memory_dim=dimension,
+                                          thought_mode=mode, think_steps=steps)
                 torch.manual_seed(learning_config.seed)
                 network = RecurrentPolicy(
                     config.appearance_dim, vocabulary_size=config.vocabulary_size,
                     max_message_length=config.max_message_length,
                     memory_dim=config.memory_dim, affect_dim=config.affect_dim,
-                    entity_memory_dim=dimension).to(device)
+                    entity_memory_dim=dimension, thought_mode=mode,
+                    think_steps=steps).to(device)
                 optimizer = torch.optim.Adam(network.parameters(), lr=config.learning_rate)
                 training_metadata = {}
                 if config.batched:
@@ -337,17 +375,21 @@ def _run_comparison(config, output, *, evaluation_seeds, training_seeds, interve
                 for name, policy in [*learned, ("always-GIVE", Action.GIVE),
                                      ("always-NOTHING", Action.NOTHING),
                                      ("producer-oracle", ProducerOracle)]:
-                    evaluation_config = (replace(condition, entity_memory_dim=policy.entity_memory_dim)
+                    evaluation_config = (replace(condition, entity_memory_dim=policy.entity_memory_dim,
+                                                 thought_mode=policy.thought_mode,
+                                                 think_steps=policy.think_steps)
                                          if isinstance(policy, RecurrentPolicy) else condition)
                     baseline = dict(training_seed=training_config.seed, policy=name,
-                                    **evaluate_policy(evaluation_config, policy))
+                                    **evaluate_policy(evaluation_config, policy,
+                                                      **evaluation_options))
                     evaluations.append(baseline)
                     if not isinstance(policy, RecurrentPolicy):
                         continue
                     for intervention in interventions:
                         result = dict(training_seed=training_config.seed, policy=name,
                                       **evaluate_policy(evaluation_config, policy,
-                                                        intervention=intervention))
+                                                        intervention=intervention,
+                                                        **evaluation_options))
                         evaluations.append(result)
                         before = evaluation_summary([baseline], config.vocabulary_size)
                         after = evaluation_summary([result], config.vocabulary_size)
@@ -374,7 +416,7 @@ def _run_comparison(config, output, *, evaluation_seeds, training_seeds, interve
                 summaries.append(dict(training_seed=training_config.seed, policy=name,
                                       intervention=intervention,
                                       **evaluation_summary(matched, config.vocabulary_size)))
-        report = dict(schema_version=3, config=asdict(config),
+        report = dict(schema_version=4 if compare_thought else 3, config=asdict(config),
                       training_execution="batched" if config.batched else "sequential",
                       evaluation_execution="sequential-fp32",
                       training=training_runs[0]['updates'] if len(train_seeds) == 1 else None,
@@ -421,6 +463,25 @@ def _run_comparison(config, output, *, evaluation_seeds, training_seeds, interve
                                   'Selection differences are null if either matched estimate lacks '
                                   'a required bin; they are descriptive, not causal identification.'),
                       evaluations=evaluations, summaries=summaries, intervention_effects=effects)
+        if compare_thought:
+            report['thought_comparison'] = dict(
+                conditions=[dict(policy=name, thought_mode=mode, think_steps=steps,
+                                 effective_think_steps=1 if mode == 'shallow' else steps)
+                            for name, mode, steps in THOUGHT_CONDITIONS],
+                matching='All configured world, capacity, learning and episode settings and '
+                         'seed lists are shared; only Thought mode and depth change. Capacity '
+                         'dimensions are matched, not parameter counts or compute.',
+                holdout='Evaluation seeds exclude every batched training world seed (modulo '
+                        '2**63), or every sequential training stream initialization seed.',
+                sampling=dict(world_steps=THOUGHT_SAMPLE_STEPS,
+                              selection='First communication and first action callback at each '
+                                        'listed world step, per evaluation including interventions; '
+                                        'absent callbacks are omitted. At most six probes. Incoming '
+                                        'state is replayed without sampling or persistent writes.',
+                              convergence_tolerance=1e-3),
+                interpretation='Sampled Thought dynamics and communication usage do not '
+                               'establish utility. Survival gains alone do not establish '
+                               'partner-history dependence; retain missing bins and censoring.')
         json.dump(report, destination, allow_nan=False, sort_keys=True)
         destination.write('\n')
     return dict(output=str(Path(output).resolve()), evaluation_seeds=seeds,

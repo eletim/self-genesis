@@ -4,6 +4,8 @@
 
 [Measured RTX 5090 training scaling](docs/rtx5090-scaling.md)
 
+[RTX 5090 recurrent Thought benchmark](docs/rtx5090-recurrent-thought.md)
+
 [Runnable CPU and RTX 5090 experiments, analysis, and validation](docs/minimal-experiment.md)
 
 [Historical v0.0.4 renewable comparison and observed behavior](docs/renewable-experiment.md)
@@ -12,13 +14,58 @@
 
 [Validated v0.0.6 Entity Memory comparison and reproduction](docs/entity-memory-experiment.md)
 
+## v0.0.9 Thought lifecycle and results
+
+The delivered default is a callback-local recurrent Thought loop: start at zero,
+apply the same Linear → ReLU core at least 16 times with fixed observation and
+private memory context, then update Working Memory and affect once. Entity Memory
+keeps its callback and encounter-completion writes. Thought resets for every
+message/action callback; persistent memories reset at episode boundaries. During
+thinking, world time, Life, Points, deaths, generation and reward are frozen.
+All pairs finish their choices before one simultaneous resource resolution and
+one world step. Full-episode gradients pass through every internal step; there
+is no early exit, extra decision reward or intermediate action sampling.
+
+Set TOML `thought_mode = "recurrent"` and `think_steps = 16`, or CLI
+`--thought-mode recurrent --think-steps 32` (also 64). Counts must be integers
+at least 16; booleans are rejected. `--thought-mode shallow` retains the original
+single tanh transform for comparisons and ignores the still-validated count.
+See the [policy details](#recurrent-agent-policy),
+[implemented scenarios](docs/representative-scenarios.md),
+and [reproduction workflow](docs/scaled-experiment-workflow.md#reproduce-the-thought-experiments).
+
+The [RTX 5090 benchmark](docs/rtx5090-recurrent-thought.md) completed all six
+small/FP32 cases at 64/128/256 worlds with finite full-episode gradients. At
+256 worlds and horizon 16, 16/32 steps measured **6,653.9 / 5,734.0 world steps/s**
+and **3.442 / 4.872 GiB** peak allocated memory. This short, single-seed sweep
+measures execution cost, not learning; 64-step throughput was not measured.
+
+The [matched three-seed comparison](docs/controlled-thought-comparison.md)
+used 50 updates × 128 worlds, 32 agents, 16 pairs and horizon 32. Both recurrent
+depths produced mean lifetimes **15.4688 / 15.4375 / 14.1146**, versus shallow's
+**14.2292 / 14.9167 / 15.2500**; all stayed below always-GIVE (**15.8021**).
+32 steps did not improve measured survival, aid or selection over 16. All learned
+policies were mixed-GIVE, with no held-out censoring. Entity Memory reset had
+zero recurrent survival effect; Appearance and Working Memory effects were small
+and mixed. Positive prior-aid and repeat-producer associations do not establish
+useful partner memory or cooperation. [Preselected Thought probes](docs/controlled-thought-dynamics.md)
+approached fixed points, which likewise does not demonstrate useful deliberation.
+
+These are bounded descriptive results from three training seeds and three held-out
+worlds, with equal episodes rather than equal compute or realized encounters.
+Shallow also differs in activation, initialization and parameter count. No
+untrained checkpoint comparison isolates learning from initialization. Throughput,
+mixed actions and token usage alone establish neither cooperation nor memory use.
+
 ## v0.0.7 scaled experiments
 
 Use the [scaled experiment workflow](docs/scaled-experiment-workflow.md) to
 reproduce capacity counts, compare throughput, and run held-out partner-history
-and Entity Memory analyses. Small, medium and large presets have **10,987**,
+and Entity Memory analyses. Historical shallow small, medium and large presets
+have **10,987**,
 **278,823** and **4,211,847** shared parameters at the default Appearance/channel
-dimensions. Batched training preserves the survival-only objective and private
+dimensions; current recurrent counts are **11,243**, **295,207** and **4,473,991**.
+Batched training preserves the survival-only objective and private
 agent state; sequential FP32 training remains the default.
 
 The retained RTX 5090 sweep completed all 33 cases across three capacities,
@@ -122,7 +169,8 @@ establish useful memory; use a longer horizon and training budget for that.
 ## v0.0.6 Entity Memory evidence
 
 The current default adds 16-dimensional Entity Memory keyed by perceived
-Appearance; `--entity-memory-dim 0` retains the v0.0.5 architecture. The
+Appearance; `--entity-memory-dim 0 --thought-mode shallow` restores the v0.0.5
+architecture. The
 [matched CPU experiment](docs/entity-memory-experiment.md) trained each condition
 for 100 updates with three training seeds and three held-out seeds. Mean lifetime
 was 12.4722 steps enabled versus 12.3611 disabled, with paired seed differences
@@ -316,12 +364,120 @@ also accepts and returns explicit `PolicyState` tensors for inspection.
 
 Each communication or action callback encodes resources, partner Appearance,
 role, received message positions, available partner action, and callback phase.
-A thought layer consumes this observation plus previous memory, affect, and
-the retrieved Entity Memory value;
-a GRU updates memory using thought and previous affect. New affect is generated
-from the observation, thought, and updated memory, then feeds the next callback.
+These inputs, previous Working Memory, affect, and retrieved Entity Memory form
+fixed context for a callback-local Thought loop. Thought starts at zero and the
+same Linear → ReLU core consumes context and the previous Thought for every
+step. `RecurrentPolicy(..., think_steps=16)` is the default; integer counts of
+16 or greater (including 32 and 64) are supported. The loop advances no world
+or Encounter time and preserves the training graph through every step.
+`thought_mode="shallow"` selects the original single Linear → tanh transform
+for comparison; `think_steps` remains validated but is unused in this mode.
+Configuration files use `thought_mode = "recurrent"` (or `"shallow"`) and
+`think_steps = 16`. CLI overrides `--thought-mode` and `--think-steps` apply to
+initialization, training, and comparison, alongside every capacity preset. For
+example, `--capacity-preset small --thought-mode recurrent --think-steps 64`
+uses the small network with 64 shared-core iterations. Both modes require an
+integer count of at least 16; shallow ignores that count. Saved experiment
+settings record the architecture and count, alongside actual network parameter
+counts in training and comparison metadata. Increasing recurrent steps does
+not add parameters.
+
+After the loop, a GRU updates memory once using final Thought and previous affect.
+New affect is generated from the observation, final Thought, and updated memory
+once, then feeds the next
+callback. Thought itself is discarded; persistent memories are retained.
 Affect dimensions have no predefined meanings or supervised targets. No agent
 indices, self labels, or auxiliary classification objectives are added.
+
+Thought diagnostics are opt-in analysis calls, with no trace collection in normal
+rollouts. Probe a representative callback using its **incoming** state:
+
+```python
+from self_genesis.thought_diagnostics import probe_thought_steps_batch
+
+steps = probe_thought_steps_batch(
+    network, observation, state, active=active, sample=(world, observer),
+    communicating=False,
+)
+```
+
+The selected row must be active; only that row is encoded and replayed, so probe
+cost does not grow with the number of worlds or observers. For scalar observations,
+use `probe_thought_steps(network, observation, state, communicating=False)`.
+Callers choose representative rows and probing frequency; neither API runs
+implicitly during training. Each step returns plain Python records with Thought
+L2 norm, L2 change norm, cosine similarity, relative change and a convergence flag,
+saturation fraction, action logits and their signed changes, and value and its
+signed change. Changes compare adjacent steps, starting with zero Thought and its
+hypothetical readout; cosine is zero when either vector is zero. Convergence means
+`change_norm / max(previous_norm, 1e-8) <= convergence_tolerance` (default `1e-3`),
+and never stops recurrence. Saturation is the fraction of zero ReLU units, or
+`abs(Thought) >= 0.99` for shallow tanh. Shallow mode emits one record.
+
+Each readout applies the memory GRU hypothetically to the same incoming memory
+and affect, then reads the action and value heads. Action logits always describe
+NOTHING/GIVE, including probes with communication context. No intermediate memory,
+affect, or Entity Memory is committed, and no decisions are sampled. Probes run
+without gradients and their records are never policy inputs or loss terms.
+
+### Matched Thought comparison
+
+The [controlled three-seed shallow/16/32 experiment](docs/controlled-thought-comparison.md)
+retains its predeclared budgets, behavioral results, intervention effects and
+[stepwise Thought dynamics](docs/controlled-thought-dynamics.md), with machine-readable evidence.
+
+Use `compare --compare-thought` to independently train the v0.0.8-compatible
+single Linear/tanh **shallow** policy and **recurrent-16 / recurrent-32** policies
+in one report. For example, this bounded CPU run uses identical density, capacity,
+learning coefficients, episode budgets and seeds across the three conditions:
+
+```sh
+python -m self_genesis compare --compare-thought --batched --deterministic \
+  --device cpu --num-agents 8 --encounter-count 4 --capacity-preset small \
+  --initial-life 4 --survival-horizon 8 --num-worlds 4 --episodes 5 \
+  --point-generation-probability-max 0.5 \
+  --training-seeds 100 200 300 --evaluation-seeds 1000 1001 \
+  --output /tmp/matched-thought.json
+```
+
+The output file must be new. This example trains nine networks, each for five
+updates of four worlds (180 training world episodes total), then performs 108
+held-out evaluations. Each training seed uses `seed + update * num_worlds + row`
+modulo `2**63`; evaluation seeds must exclude **all** these worlds, across all
+training seeds. Sequential training is also supported: it preserves the existing
+continuous episode sampling streams, and evaluation seeds must be disjoint from
+all training stream initialization seeds. Explicit evaluation seeds are required.
+Batched training is preferable when an explicit per-episode seed schedule is needed.
+
+The matrix overrides `--thought-mode` and `--think-steps` and automatically runs
+Entity Memory reset, Appearance shuffle, Appearance replacement and Working
+Memory reset separately, regardless of `--interventions`. It keeps the configured
+Entity Memory dimension for all three networks; the ordinary comparison's
+separately trained no-Entity-Memory control is not part of this matrix. Fixed
+always-GIVE, always-NOTHING and producer-oracle references share the evaluation
+worlds. Fixed reference results repeated across training seeds are not independent
+replicates. Evaluation always uses fresh state and frozen weights with the
+sequential FP32 reference; sampling streams restart for each intervention.
+
+Schema 4 retains the existing `training_runs`, `evaluations`, `summaries` and
+`intervention_effects`: survival with censoring, GIVE/NOTHING collapse, actual
+partner-history bins, first/repeat producer contrasts, communication usage and
+matched intervention deltas. Per-run configs and parameter counts make matching
+auditable. Capacity dimensions are matched, **not** parameter counts or compute:
+shallow has fewer parameters; recurrent-16 and recurrent-32 share the same count.
+Equal episode budgets need not produce equal encounter exposure.
+
+Each learned evaluation also contains `thought_samples`: the first communication
+and first action callback at world steps 0, 1 and 2 (at most six probes; absent
+callbacks are omitted). Every sample identifies its world step, agent and phase
+and records all intermediate Thought diagnostics described above. These bounded
+early-episode samples replay incoming state without sampling or persistent writes;
+they do not represent a population average or late-episode dynamics. Shallow emits
+one diagnostic step, recurrent policies emit 16 or 32. `thought_comparison` records
+the condition matrix, sampling and interpretation semantics. No probes run during
+training. Survival gains, communication entropy and apparent Thought convergence
+alone do not establish useful partner-specific memory; inspect supported history
+contrasts and matched intervention effects, retaining empty-bin nulls.
 
 Entity Memory stores one unlabeled latent value per distinct observed Appearance,
 using exact tensor equality for retrieval. An unseen Appearance retrieves zeros;
@@ -343,7 +499,8 @@ with the distinct Appearances observed during an episode; there is no eviction o
 approximate match.
 
 `entity_memory_dim` defaults to 16 in the network and experiment configuration.
-Set it to `0` in TOML or pass `--entity-memory-dim 0` to disable Entity Memory and
+Set it to `0` in TOML or pass `--entity-memory-dim 0` to disable Entity Memory.
+Also set `thought_mode = "shallow"` in TOML or pass `--thought-mode shallow` to
 recover the v0.0.5 layer shapes, initialization, and forward computation. The
 existing `working-memory-reset` intervention resets only Working Memory.
 
@@ -892,20 +1049,21 @@ Call `detach()` only at an intentional training graph boundary.
 
 `RecurrentPolicy` shares the same weights and recurrent computation between
 sequential callbacks and `forward_batch`. The named capacities keep the existing
-architecture: one thought Linear, one Working Memory GRUCell, one circulating
-affect Linear, message/action/value Linear heads, and two Entity Memory GRUCells
+architecture: one shared recurrent Thought Linear with ReLU, one Working Memory
+GRUCell, one circulating affect Linear, message/action/value Linear heads, and
+two Entity Memory GRUCells
 (callback and resolved-encounter updates). Thought width equals Working Memory
 width. All presets retain all components; no extra observations or labels are
 introduced. The scalar critic reads the updated private Working Memory.
 
 Exact shared parameter counts at `appearance_dim=8`, `vocabulary_size=4`,
-`max_message_length=3` are:
+`max_message_length=3` in the default recurrent mode are:
 
 | Preset | Working Memory / thought | Affect | Entity Memory value | Parameters |
 | --- | ---: | ---: | ---: | ---: |
-| Small | 16 | 4 | 16 | 10,987 |
-| Medium | 128 | 32 | 64 | 278,823 |
-| Large | 512 | 128 | 256 | 4,211,847 |
+| Small | 16 | 4 | 16 | 11,243 |
+| Medium | 128 | 32 | 64 | 295,207 |
+| Large | 512 | 128 | 256 | 4,473,991 |
 
 Use `RecurrentPolicy.from_preset(8, "large")` or the configuration files
 `configs/policy-small.toml`, `configs/policy-medium.toml`, and
@@ -943,7 +1101,7 @@ observation = BatchedObservation(
 active = torch.tensor([[True, False, False, False], [False, True, False, False]])
 logits, values, state = network.forward_batch(
     observation, state, communicating=True, active=active)
-print(network.parameter_count)  # 4211847
+print(network.parameter_count)  # 4473991
 ```
 
 All observations and masks must be on the policy device; Appearance and state
@@ -1152,8 +1310,9 @@ Optional CUDA BF16 autocast is available with `--mixed-precision bf16` (or
 `--device auto` also works when it resolves to a BF16-capable CUDA device;
 CPU and unsupported CUDA devices are rejected before creating output.
 FP32 remains the default (`--mixed-precision fp32`). Eligible policy operations
-use BF16 while parameters, optimizer state, recurrent/Entity Memory storage,
-value-head evaluation, probability/entropy calculations, reward accumulation,
+use BF16 while the recurrent Linear/ReLU Thought loop, parameters, optimizer
+state, recurrent/Entity Memory storage, value-head evaluation,
+probability/entropy calculations, reward accumulation,
 advantages and loss reductions remain FP32. Backward and optimizer updates run
 outside autocast; non-finite losses or gradients abort the update. BF16 uses no
 FP16 loss scaler. The selected precision is recorded in the run configuration.
@@ -1162,6 +1321,9 @@ The mixed-precision tests compare finite losses and parameter gradients against
 FP32 on matched discrete trajectories, including repeated updates, Entity Memory,
 zero-length messages and 32-step survival horizons. Run them on CUDA hardware
 with `python -m unittest discover -s tests -p test_mixed_precision.py -v`.
+The Thought precision boundary preserves every recurrence and episode gradient;
+[measured validation](docs/mixed-precision-validation.md) records the original
+failures and the improvement without widening comparison tolerances.
 These bounded comparisons do not establish stability for all capacities or long
 survival horizons; validate representative runs against FP32 before considering
 a change to the default. Identical seeds need not produce identical trajectories

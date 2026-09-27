@@ -1,0 +1,20 @@
+test_core_rectifies_negative_activations (test_thought.ThoughtTests.test_core_rectifies_negative_activations) ... ok
+test_fixed_context_shared_core_and_callback_boundaries (test_thought.ThoughtTests.test_fixed_context_shared_core_and_callback_boundaries) ... ok
+test_shallow_mode_preserves_single_tanh_transform (test_thought.ThoughtTests.test_shallow_mode_preserves_single_tanh_transform) ... ok
+test_step_count_does_not_add_parameters_and_is_validated (test_thought.ThoughtTests.test_step_count_does_not_add_parameters_and_is_validated) ... ok
+test_cli_overrides_and_invalid_count (test_thought_configuration.ThoughtConfigurationTests.test_cli_overrides_and_invalid_count) ... ok
+test_training_and_comparison_initialization_and_metadata (test_thought_configuration.ThoughtConfigurationTests.test_training_and_comparison_initialization_and_metadata) ... ok
+test_validation_and_presets (test_thought_configuration.ThoughtConfigurationTests.test_validation_and_presets) ... ok
+test_autocast_probe_matches_final_value_and_preserves_rng (test_thought_diagnostics.ThoughtDiagnosticsTests.test_autocast_probe_matches_final_value_and_preserves_rng) ... ok
+test_metrics_and_final_readout (test_thought_diagnostics.ThoughtDiagnosticsTests.test_metrics_and_final_readout) ... ok
+test_probe_preserves_state_rng_decisions_and_gradients (test_thought_diagnostics.ThoughtDiagnosticsTests.test_probe_preserves_state_rng_decisions_and_gradients) ... ok
+test_selected_batch_row_matches_scalar_without_full_batch_probe (test_thought_diagnostics.ThoughtDiagnosticsTests.test_selected_batch_row_matches_scalar_without_full_batch_probe) ... ok
+test_zero_and_shallow_saturation_and_invalid_tolerance (test_thought_diagnostics.ThoughtDiagnosticsTests.test_zero_and_shallow_saturation_and_invalid_tolerance) ... ok
+test_dead_agents_and_finished_worlds_do_not_think (test_thought_execution.ThoughtExecutionTests.test_dead_agents_and_finished_worlds_do_not_think) ... ok
+test_private_state_and_episode_reset (test_thought_execution.ThoughtExecutionTests.test_private_state_and_episode_reset) ... ok
+test_rollout_boundaries_and_complete_episode_gradients (test_thought_execution.ThoughtExecutionTests.test_rollout_boundaries_and_complete_episode_gradients) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 10.554s
+
+OK

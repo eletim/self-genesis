@@ -1,0 +1,18 @@
+PASS: PYTHONPATH=src /tmp/self-genesis-verify-gpu/bin/python examples/verify_thought_comparison.py > /tmp/thought-verified.json
+  3 reports with matching SHA-256 digests and runner hash
+  9 runs, 450 updates, 57600 training episodes
+  162 evaluations, 54 recomputed summaries, 108 recomputed paired effects
+  810 sampled callbacks with complete finite stepwise diagnostics
+  Exact predeclared configuration and disjoint training/evaluation seed schedules
+  Equal initial evaluation worlds; finite losses and gradient norms
+
+PASS: CUDA_VISIBLE_DEVICES='' PYTHONPATH=src /tmp/self-genesis-verify-gpu/bin/python -m unittest discover -s tests -v
+  212 tests in 74.659 seconds; 14 CUDA skips
+  See tests-cpu.log
+
+PASS: PYTHONPATH=src CUBLAS_WORKSPACE_CONFIG=:4096:8 /tmp/self-genesis-verify-gpu/bin/python -m unittest discover -s tests -p 'test_thought*.py' -v
+  15 tests in 10.554 seconds
+  See tests-cuda.log
+
+PASS: /tmp/self-genesis-verify-gpu/bin/python -m compileall -q src tests examples
+PASS: git diff --check

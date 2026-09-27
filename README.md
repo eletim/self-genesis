@@ -376,6 +376,10 @@ without gradients and their records are never policy inputs or loss terms.
 
 ### Matched Thought comparison
 
+The [controlled three-seed shallow/16/32 experiment](docs/controlled-thought-comparison.md)
+retains its predeclared budgets, behavioral results, intervention effects and
+[stepwise Thought dynamics](docs/controlled-thought-dynamics.md), with machine-readable evidence.
+
 Use `compare --compare-thought` to independently train the v0.0.8-compatible
 single Linear/tanh **shallow** policy and **recurrent-16 / recurrent-32** policies
 in one report. For example, this bounded CPU run uses identical density, capacity,

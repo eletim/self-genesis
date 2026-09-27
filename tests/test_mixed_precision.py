@@ -107,7 +107,7 @@ class MixedPrecisionTests(unittest.TestCase):
                         network.value_head.register_forward_hook(
                         lambda module, inputs, output: value_dtypes.append(output.dtype))]
                     try:
-                        for _ in range(2):
+                        for update in range(2):
                             results, choices = [], []
                             for collector, optimizer in zip(collectors, optimizers):
                                 collect = collector.collect
@@ -138,7 +138,8 @@ class MixedPrecisionTests(unittest.TestCase):
                             for field in ('loss', 'actor_loss', 'value_loss', 'action_entropy', 'message_entropy'):
                                 expected, actual = getattr(results[0], field), getattr(results[1], field)
                                 self.assertAlmostEqual(actual, expected, delta=0.02 * abs(expected) + 0.002)
-                            for expected, actual in zip(reference.parameters(), network.parameters()):
+                            for (name, expected), actual in zip(
+                                    reference.named_parameters(), network.parameters()):
                                 self.assertEqual(actual.dtype, torch.float32)
                                 self.assertTrue(torch.isfinite(actual).all())
                                 if expected.grad is None:
@@ -147,12 +148,56 @@ class MixedPrecisionTests(unittest.TestCase):
                                     self.assertEqual(actual.grad.dtype, torch.float32)
                                     self.assertTrue(torch.isfinite(actual.grad).all())
                                     error = (actual.grad - expected.grad).norm()
-                                    self.assertLessEqual(error, 0.03 * expected.grad.norm() + 0.002)
+                                    self.assertLessEqual(error, 0.03 * expected.grad.norm() + 0.002,
+                                                         msg=f'{name}, update {update + 1}')
                         self.assertEqual(set(head_dtypes), {torch.bfloat16})
                         self.assertEqual(set(value_dtypes), {torch.float32})
                     finally:
                         for handle in handles:
                             handle.remove()
+
+    @unittest.skipUnless(torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+                         'CUDA BF16 hardware unavailable')
+    def test_bf16_thought_preserves_every_step_and_callback_gradient(self):
+        for steps in (16, 32):
+            with self.subTest(steps=steps):
+                torch.manual_seed(18)
+                network = RecurrentPolicy(3, think_steps=steps).cuda()
+                state = network.initial_batch_state(1, 2, slots=2)
+                inputs = torch.ones(2, network.affect_update.in_features - 2 * network.memory_dim,
+                                    device='cuda')
+                retrieved = torch.zeros(2, 16, device='cuda')
+                # Yielding a diagnostic step must restore the caller's autocast.
+                context = torch.cat((inputs, state.memory[0], state.affect[0], retrieved), dim=-1)
+                with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                    for thought in network._think(context, state.memory[0]):
+                        self.assertEqual(thought.dtype, torch.float32)
+                        self.assertEqual(network.action_head(thought).dtype, torch.bfloat16)
+                outputs = []
+
+                def capture(module, args, output):
+                    self.assertEqual(output.dtype, torch.float32)
+                    output.retain_grad()
+                    outputs.append(output)
+
+                handle = network.thought.register_forward_hook(capture)
+                try:
+                    with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                        _, memory, affect = network._recur(
+                            inputs, state.memory[0], state.affect[0], retrieved)
+                        memory.retain_grad()
+                        affect.retain_grad()
+                        _, final_memory, _ = network._recur(inputs, memory, affect, retrieved)
+                        logits = network.action_head(final_memory)
+                        self.assertEqual(logits.dtype, torch.bfloat16)
+                    logits.float().sum().backward()
+                    self.assertEqual(len(outputs), 2 * steps)
+                    for tensor in (*outputs, memory, affect):
+                        self.assertIsNotNone(tensor.grad)
+                        self.assertTrue(torch.isfinite(tensor.grad).all())
+                        self.assertGreater(tensor.grad.abs().sum().item(), 0)
+                finally:
+                    handle.remove()
 
     @unittest.skipUnless(torch.cuda.is_available(), 'CUDA hardware unavailable')
     def test_unsupported_cuda_rejected_before_output(self):

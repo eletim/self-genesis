@@ -100,9 +100,14 @@ class RecurrentPolicy(nn.Module):
         if self.thought_mode == "shallow":
             yield torch.tanh(self.thought(context))
         else:
-            thought = torch.zeros_like(previous_memory)
+            # BF16 rounding near zero changes ReLU gates repeatedly through
+            # the shared core and can distort full-episode gradients. Keep
+            # this recurrence in the parameter dtype, with its graph intact.
+            context = context.to(self.thought.weight)
+            thought = torch.zeros_like(previous_memory).to(context)
             for _ in range(self.think_steps):
-                thought = F.relu(self.thought(torch.cat((context, thought), dim=-1)))
+                with torch.autocast(device_type=context.device.type, enabled=False):
+                    thought = F.relu(self.thought(torch.cat((context, thought), dim=-1)))
                 yield thought
 
     def _recur(self, inputs, previous_memory, previous_affect, retrieved):

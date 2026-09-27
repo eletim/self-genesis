@@ -1308,8 +1308,9 @@ Optional CUDA BF16 autocast is available with `--mixed-precision bf16` (or
 `--device auto` also works when it resolves to a BF16-capable CUDA device;
 CPU and unsupported CUDA devices are rejected before creating output.
 FP32 remains the default (`--mixed-precision fp32`). Eligible policy operations
-use BF16 while parameters, optimizer state, recurrent/Entity Memory storage,
-value-head evaluation, probability/entropy calculations, reward accumulation,
+use BF16 while the recurrent Linear/ReLU Thought loop, parameters, optimizer
+state, recurrent/Entity Memory storage, value-head evaluation,
+probability/entropy calculations, reward accumulation,
 advantages and loss reductions remain FP32. Backward and optimizer updates run
 outside autocast; non-finite losses or gradients abort the update. BF16 uses no
 FP16 loss scaler. The selected precision is recorded in the run configuration.
@@ -1318,6 +1319,9 @@ The mixed-precision tests compare finite losses and parameter gradients against
 FP32 on matched discrete trajectories, including repeated updates, Entity Memory,
 zero-length messages and 32-step survival horizons. Run them on CUDA hardware
 with `python -m unittest discover -s tests -p test_mixed_precision.py -v`.
+The Thought precision boundary preserves every recurrence and episode gradient;
+[measured validation](docs/mixed-precision-validation.md) records the original
+failures and the improvement without widening comparison tolerances.
 These bounded comparisons do not establish stability for all capacities or long
 survival horizons; validate representative runs against FP32 before considering
 a change to the default. Identical seeds need not produce identical trajectories

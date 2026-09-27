@@ -12,6 +12,23 @@
 
 [Validated v0.0.6 Entity Memory comparison and reproduction](docs/entity-memory-experiment.md)
 
+## v0.0.7 scaled experiments
+
+Use the [scaled experiment workflow](docs/scaled-experiment-workflow.md) to
+reproduce capacity counts, compare throughput, and run held-out partner-history
+and Entity Memory analyses. Small, medium and large presets have **10,987**,
+**278,823** and **4,211,847** shared parameters at the default Appearance/channel
+dimensions. Batched training preserves the survival-only objective and private
+agent state; sequential FP32 training remains the default.
+
+The retained RTX 5090 sweep completed all 33 cases across three capacities,
+sequential execution and 64–1024 batched worlds, with FP32/BF16 batched training.
+At 256 worlds, FP32 measured 15,389–15,707 world steps/s versus 240–250 sequentially
+on the four-agent, horizon-16 workload. These are bounded execution measurements,
+not evidence of improved learning or social behavior. BF16 remains optional.
+`compare` trains and evaluates sequential policies; it does not load batched
+training JSONL. The behavioral evidence below predates the scaling work.
+
 ## v0.0.6 Entity Memory evidence
 
 The current default adds 16-dimensional Entity Memory keyed by perceived
@@ -581,7 +598,7 @@ done
 
 This two-update smoke run is not the recorded 100-update experiment. Use the
 [Entity Memory reproduction procedure and retained report](docs/entity-memory-experiment.md)
-for the current validated findings. The historical
+for the historical v0.0.6 validated findings. The historical
 [learning-method comparison](docs/matched-learning-experiment.md#reproduction-and-retained-evidence)
 requires its recorded checkout. Keep all conditions except `--training-method` matched;
 REINFORCE ignores the value/entropy coefficients.

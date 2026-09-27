@@ -2,6 +2,8 @@
 
 [Canonical design principles](docs/design-principles.md)
 
+[Measured RTX 5090 training scaling](docs/rtx5090-scaling.md)
+
 [Runnable CPU and RTX 5090 experiments, analysis, and validation](docs/minimal-experiment.md)
 
 [Historical v0.0.4 renewable comparison and observed behavior](docs/renewable-experiment.md)

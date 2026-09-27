@@ -677,3 +677,32 @@ comparisons. World initialization and sampling streams restart identically for
 each evaluation; changed actions can subsequently change resources, survivors,
 encounters, and generation draws. Reports contain the treatment and metric
 semantics needed to interpret these differences, without adding policy inputs.
+
+The resource-only `BatchedWorld` API runs independent worlds with tensor state;
+policy, encounter, and training collection continue to use the existing APIs.
+Supply an explicit seed per world. Life, Points, and generation probabilities
+have shape `[world, agent]`; Appearance has shape `[world, agent, feature]`.
+
+```python
+import torch
+from self_genesis.batched_world import BatchedWorld
+from self_genesis.config import ExperimentConfig
+
+worlds = BatchedWorld(
+    ExperimentConfig(num_agents=2, survival_horizon=10), seeds=[41, 42]
+)
+# -1 is NOTHING; other entries are same-world GIVE recipient indices.
+result = worlds.step(torch.tensor([[1, 0], [-1, -1]], device=worlds.state.life.device))
+worlds.reset(0, seed=43)  # reset only this world's episode and random streams
+```
+
+`step` requires int64 targets on the state device and validates them before
+mutation. Gifts resolve simultaneously before decay and survivor-only Point
+regeneration. Rewards are per-agent living steps, without a GIVE bonus.
+`terminated` marks extinction; `horizon_completed` marks a horizon reached with
+survivors. Extinction on the horizon takes precedence. Completed rows freeze,
+return zero new rewards/transfers/generation, and retain their completion flags
+until reset. `successful_transfers` is a boolean `[world, donor]` mask whose
+recipients are the input targets. Separate CPU random streams reproduce each
+seed's sequential `World` initialization and generation on either device,
+independently of batch ordering or other worlds' deaths and resets.

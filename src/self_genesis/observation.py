@@ -118,7 +118,7 @@ class RunRecorder:
         participants = sorted(
             (index for index, policy in enumerate(policies) if policy.decisions),
             key=lambda index: not policies[index].decisions[0].observation.first)
-        # Restore protocol order: both messages, then both actions.
+        # Group messages before actions, preserving each pair's dependency order.
         for phase in range(2):
             for index in participants:
                 decision = policies[index].decisions[phase]
@@ -147,6 +147,7 @@ class RunRecorder:
                 })
         self._write(
             "step", step=collector.elapsed_steps, participants=participants,
+            pairs=collector.protocol.last_pairs,
             callbacks=callbacks,
             entity_memory_completions=[dict(agent=index, **policies[index].completion)
                                        for index in participants

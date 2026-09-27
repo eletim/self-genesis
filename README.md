@@ -174,6 +174,24 @@ disables token transmission. Tokens carry no predefined meaning, reward, or
 direct world effect. Invalid messages or actions raise `ValueError` before
 world state changes (policy callbacks and random sampling are not rolled back).
 
+Encounter density is configurable in both sequential and batched execution with
+`--encounter-count` (TOML: `encounter_count`) or `--encounter-fraction`
+(TOML: `encounter_fraction`). Count must be a nonnegative integer; fraction must
+be finite and in `[0, 1]`. Supplying both is an error, including across TOML and
+CLI; an override of the same setting replaces its configured value. If neither
+is supplied, count defaults to 1. For the current living population `L`, the
+number of disjoint pairs is `min(count, L // 2)` or
+`floor(fraction * L / 2)`. Zero pairs still advance survival time; an episode
+with no decisions records zero loss and skips the optimizer update.
+
+For 32-agent comparisons, keep all other settings fixed and run with
+`--num-agents 32 --encounter-count 1`, then counts `4`, `8`, and `16`.
+These options combine with existing `--capacity-preset small|medium|large`
+and leave Actor-Critic coefficients unchanged. Resolved density settings are
+saved in the existing configuration records and summaries. Sequential traces
+include explicit `pairs` for relationship analysis; batched trace participants
+are consecutive first/second pairs, padded with `-1` for unused slots.
+
 Run the checks from the repository root:
 
 ```sh

@@ -72,7 +72,10 @@ def survival_loss_components(
                                  else message_entropies)
                     entropies.append(decision.entropy)
     if not actor_terms:
-        raise ValueError("Episode has no sampled policy decisions")
+        if not any(rollout.experiences):
+            raise ValueError("Episode has no sampled policy decisions")
+        zero = torch.zeros(())
+        return SurvivalLoss(zero, zero, zero, zero, zero)
     actor_loss = torch.stack(actor_terms).sum() / len(rollout.experiences)
 
     def average(terms):
@@ -116,7 +119,8 @@ def _batched_survival_loss(rollout, method, value_coefficient,
             terms = message_terms if decision.communicating else action_terms
             terms.append(decision.entropy[decision.active].float().sum())
     if not actor_terms:
-        raise ValueError("Episode has no sampled policy decisions")
+        zero = returns.new_zeros(())
+        return SurvivalLoss(zero, zero, zero, zero, zero)
     actor = torch.stack(actor_terms).sum() / returns.numel()
 
     def average(terms):
@@ -173,10 +177,12 @@ def train_episode(collector: RolloutCollector,
         action_entropy_coefficient=config.action_entropy_coefficient,
         message_entropy_coefficient=config.message_entropy_coefficient)
     optimizer.zero_grad(set_to_none=True)
-    components.loss.backward()
+    if components.loss.requires_grad:
+        components.loss.backward()
     collector.detach()
     metrics = rollout_metrics(rollout, collector.network)
-    optimizer.step()
+    if components.loss.requires_grad:
+        optimizer.step()
     result = TrainingResult(
         components.loss.item(), rollout.steps,
         tuple(sum(item.reward for item in items) for items in rollout.experiences),
@@ -237,14 +243,16 @@ def train_batch(collector: BatchedRolloutCollector,
     if not bool(torch.isfinite(components.loss)):
         collector.detach()
         raise ValueError("Non-finite batched training loss; optimizer update skipped")
-    components.loss.backward()
+    if components.loss.requires_grad:
+        components.loss.backward()
     collector.detach()
     gradients = [p.grad for p in collector.network.parameters() if p.grad is not None]
-    if not bool(torch.stack([torch.isfinite(grad).all() for grad in gradients]).all()):
+    if gradients and not bool(torch.stack([torch.isfinite(grad).all() for grad in gradients]).all()):
         optimizer.zero_grad(set_to_none=True)
         raise ValueError("Non-finite batched training gradients; optimizer update skipped")
     metrics = rollout_metrics(rollout, collector.network)
-    optimizer.step()
+    if components.loss.requires_grad:
+        optimizer.step()
     returns = torch.stack([item.reward for item in rollout.experiences]).float().sum(0)
     return BatchedTrainingResult(
         components.loss.item(), tuple(rollout.end_steps.tolist()),

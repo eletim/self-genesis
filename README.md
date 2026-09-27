@@ -708,6 +708,26 @@ samples only within one training seed, policy, and intervention:
   mean length is null with no callbacks. Empty messages are counted, including a
   disabled channel. Fixed-length learned messages may show usage without utility.
 
+Evaluation episodes and `examples/analyze_run.py` also report `encounter_exposure`.
+Its `per_agent` rows include every starting agent, including agents with zero
+encounters: `encounters` counts action callbacks, `repeat_encounters` counts
+meetings after the first with each actual partner, and `unique_partners` counts
+partners met. Communication callbacks do not add encounters. Counts cover the
+observed episode, including finite-horizon episodes, without extrapolation.
+
+`encounter_count_distribution` and `repeat_count_distribution` map a count to its
+number of agent-episode samples; their denominator is `agent_episodes`.
+`same_partner_count_distribution` maps meetings with one partner to the number
+of directed agent-partner episode samples. Its denominator,
+`directed_partner_episodes`, includes every possible other partner, with unseen
+partners in bin zero (no self pairs). `repeat_fraction` divides
+`repeat_encounter_callbacks` by `encounter_callbacks`, and is null without
+encounters. Evaluation summaries pool these distributions within the existing
+training-seed/policy/intervention groups, preserving episode boundaries.
+Actual identities remain analysis-only, including under Appearance collisions
+and interventions. Existing strictly prior aid histories, first/repeat producer
+bins, GIVE/collapse and Communication metrics retain their own denominators.
+
 `intervention_effects` reports intervention-minus-untreated differences in observed
 lifetime, censoring count, and GIVE fraction for each matched training/evaluation
 seed pair and learned condition. The detailed rows and summaries support history and Communication

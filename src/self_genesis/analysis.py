@@ -1,5 +1,6 @@
 """Evaluation metrics and relationship histories, never policy inputs."""
 
+from collections import Counter
 import math
 
 
@@ -18,6 +19,7 @@ class RelationshipAnalysis:
         self.generated = [0] * len(self.appearance)
         self.history = {}
         self.directed_aid = {}
+        self.encounter_counts = [Counter() for _ in self.appearance]
         self.producer_midpoint = (None if self.probability is None else
                                   (min(self.probability) + max(self.probability)) / 2)
         self.rows = []
@@ -73,6 +75,7 @@ class RelationshipAnalysis:
                                   else prior[field] + aided)
             self.history[key] = updated
         for _, _, agent, partner, action, success in pending:
+            self.encounter_counts[agent][partner] += 1
             attempts, aid = self.directed_aid.get((agent, partner), (0, 0))
             self.directed_aid[agent, partner] = (
                 attempts + (action == 'GIVE'),
@@ -81,6 +84,20 @@ class RelationshipAnalysis:
         self.generated = [
             None if generated is None or total is None else total + generated[i]
             for i, total in enumerate(self.generated)]
+
+    def encounter_exposure(self):
+        """Episode totals by actual identity, including agents never selected."""
+        partners = self.encounter_counts
+        agents = []
+        for agent, counts in enumerate(partners):
+            distribution = Counter(counts.values())
+            distribution[0] += len(partners) - 1 - len(counts)
+            agents.append(dict(
+                agent=agent, encounters=sum(counts.values()),
+                repeat_encounters=sum(count - 1 for count in counts.values()),
+                unique_partners=len(counts),
+                same_partner_count_distribution=dict(sorted(distribution.items()))))
+        return dict(per_agent=agents, **encounter_exposure_metrics(agents))
 
     def _third_party_history(self, agent, partner):
         """Prior directed aid involving either participant and anyone else."""
@@ -96,6 +113,28 @@ class RelationshipAnalysis:
                     None if any(h[1] is None for h in histories)
                     else sum(h[1] for h in histories))
         return result
+
+
+def encounter_exposure_metrics(agents):
+    """Pool agent-episode counts without joining identities across episodes.
+
+    Same-partner bins count directed possible partner pairs, including unseen
+    partners at zero. Encounters count one action callback per participant.
+    """
+    same_partner = Counter()
+    for agent in agents:
+        for count, samples in agent['same_partner_count_distribution'].items():
+            same_partner[int(count)] += samples
+    encounters = sum(agent['encounters'] for agent in agents)
+    repeats = sum(agent['repeat_encounters'] for agent in agents)
+    return dict(
+        agent_episodes=len(agents), encounter_callbacks=encounters,
+        repeat_encounter_callbacks=repeats,
+        repeat_fraction=repeats / encounters if encounters else None,
+        encounter_count_distribution=dict(sorted(Counter(a['encounters'] for a in agents).items())),
+        repeat_count_distribution=dict(sorted(Counter(a['repeat_encounters'] for a in agents).items())),
+        same_partner_count_distribution=dict(sorted(same_partner.items())),
+        directed_partner_episodes=sum(same_partner.values()))
 
 
 def action_metrics(rows):
@@ -187,6 +226,9 @@ def evaluation_summary(evaluations, vocabulary_size):
     observed_mean = sum(row['observed_steps'] for row in lifetimes) / len(lifetimes)
     return dict(
         **actions,
+        encounter_exposure=encounter_exposure_metrics([
+            agent for evaluation in evaluations
+            for agent in evaluation['encounter_exposure']['per_agent']]),
         give_collapse=('no_actions' if give is None else
                        'near_always_GIVE' if give >= 0.95 else
                        'near_always_NOTHING' if give <= 0.05 else 'mixed'),

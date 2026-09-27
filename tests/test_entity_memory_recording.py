@@ -140,6 +140,7 @@ class EntityMemoryRecordingTests(unittest.TestCase):
         self.assertNotEqual(baseline['initial']['point_generation_probability'],
                             changed['initial']['point_generation_probability'])
         self.assertEqual(baseline['entity_memory_events'], changed['entity_memory_events'])
+        self.assertEqual(baseline['encounter_exposure'], changed['encounter_exposure'])
         self.assertEqual(len(expected), len(captures))
         for first, second in zip(expected, captures):
             self.assertTrue(torch.equal(first, second))

@@ -251,6 +251,7 @@ def evaluate_policy(config: ExperimentConfig,
         **action_metrics(rows), relationship_actions=rows, history_key="actual_partner",
         relationship_metrics=relationship_metrics(rows),
         partner_history_metrics=partner_history_metrics(rows),
+        encounter_exposure=relationships.encounter_exposure(),
         entity_memory_events=memory_history,
         communication_messages=messages,
         communication=communication_metrics([row['message'] for row in messages],
@@ -364,6 +365,13 @@ def run_comparison(config: ExperimentConfig, output: Path, *, evaluation_seeds=N
                                           'encounters, then repeat minus first. Each bin reports '
                                           'callback counts and missing_bin; empty rates and '
                                           'unsupported differences are null.',
+                          encounter_exposure='Per-agent episode encounter and repeat counts include '
+                                             'zero-exposure agents. A repeat is a meeting after the '
+                                             'first with the same actual partner. Count distributions '
+                                             'use agent-episodes; same-partner distributions use all '
+                                             'directed possible partner-episodes, including unseen '
+                                             'partners at zero. Repeat fraction divides repeat action '
+                                             'callbacks by all encounter action callbacks; null if empty.',
                           communication='Counts and empirical token entropy over sent messages, '
                                         'including empty-message callbacks. These measure channel '
                                         'usage, not causal utility.',

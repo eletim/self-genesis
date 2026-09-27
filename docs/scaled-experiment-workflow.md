@@ -99,13 +99,14 @@ histories and cannot be passed to `examples/analyze_run.py`.
 
 ## Held-out capacity and Entity Memory comparison
 
-The existing `compare` command trains sequential FP32 policies and evaluates
-frozen weights; it rejects `--batched`. Training JSONL does not save a loadable
-checkpoint, and `compare` does not import a preceding batched run. Thus the
-procedure below evaluates sequential capacity variants, not the policies from
-the throughput sweep. Evaluating batched-trained weights requires a separate
-Python experiment retaining the network and calling `evaluate_policy`; it is
-not supplied by this CLI workflow.
+The `compare` command defaults to sequential FP32 training. Add `--batched`
+and `--num-worlds` to train batched policies and evaluate their actual frozen
+weights through the same sequential FP32 evaluator. Batched comparisons require
+explicit held-out evaluation seeds disjoint from all training world seeds. See
+[the density evaluation command](../README.md#batched-trained-density-evaluation)
+for a reproducible example. Training JSONL does not save a loadable checkpoint;
+comparison reruns training in memory. The procedure below uses sequential capacity
+variants, not the policies from the throughput sweep.
 
 Choose budgets and disjoint training/evaluation seeds before viewing results.
 This small two-update command is a smoke test, not a convergence experiment:

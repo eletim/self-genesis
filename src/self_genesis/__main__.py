@@ -64,8 +64,8 @@ def main() -> None:
         overrides.pop(key)
     try:
         config = load_config(args.config, **overrides)
-        if config.batched and args.command != "train":
-            raise ValueError("batched mode is only supported for train")
+        if config.batched and args.command == "init":
+            raise ValueError("batched mode is only supported for train or compare")
         if args.command == "compare":
             result = run_comparison(config, args.output, evaluation_seeds=args.evaluation_seeds,
                                     training_seeds=args.training_seeds,
